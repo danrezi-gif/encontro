@@ -1,0 +1,41 @@
+name: Deploy Server
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'server/**'
+      - 'shared/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build server
+        run: npm run build:server
+
+      - name: Upload server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-bundle
+          path: dist/server.cjs
+
+  # TODO: Add deployment step for Railway/Fly.io
+  # deploy:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Deploy to Railway
+  #       run: echo "Configure Railway deployment"
