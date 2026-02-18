@@ -3,10 +3,14 @@ import { createScene } from "./scene";
 import { createRenderer } from "./renderer";
 import { InputManager } from "./input";
 import { NetworkManager } from "../network/NetworkManager";
+import type { SignalArtifact } from "@shared/SignalArtifact";
 
 /**
  * Main application — bootstraps the Three.js scene, renderer, WebXR,
  * and the animation loop. This is the entry point for the experience.
+ *
+ * Receives a SignalArtifact from the Signal Layer (Phase 0) to seed
+ * presence aesthetics — color, sound signature, mark texture.
  */
 export class App {
   private renderer: THREE.WebGLRenderer;
@@ -16,8 +20,10 @@ export class App {
   private input: InputManager;
   private network: NetworkManager;
   private isRunning = false;
+  private artifact: SignalArtifact | null;
 
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(private canvas: HTMLCanvasElement, artifact?: SignalArtifact) {
+    this.artifact = artifact ?? null;
     this.renderer = createRenderer(canvas);
     const { scene, camera } = createScene();
     this.scene = scene;
