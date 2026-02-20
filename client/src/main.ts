@@ -1,7 +1,6 @@
 import { App } from "./core/app";
-import { SignalCanvas } from "./signal/SignalCanvas";
+import { SignalOverlay } from "./signal/SignalOverlay";
 import { Landing } from "./landing/Landing";
-import type { SignalArtifact } from "@shared/SignalArtifact";
 
 const canvas = document.getElementById("encontro-canvas") as HTMLCanvasElement;
 if (!canvas) {
@@ -12,18 +11,25 @@ let app: App | null = null;
 
 /**
  * Landing page appears first — sets the atmosphere.
- * When the user chooses to enter, the Signal Canvas begins.
- * On artifact completion, the WebXR encounter app starts.
+ * When the user clicks "begin", the Three.js world starts immediately
+ * and signal creation happens as glass panels overlaying the live 3D scene.
  */
 const landing = new Landing(document.body);
 
 landing.onEnter(() => {
-  const signal = new SignalCanvas(document.body);
+  // Start the 3D world immediately
+  app = new App(canvas);
+  app.setAutoOrbit(true);
+  app.start();
 
-  signal.onComplete((artifact: SignalArtifact) => {
-    // Start the Three.js / WebXR encounter app
-    app = new App(canvas, artifact);
-    app.start();
+  // Signal creation overlays the live 3D scene
+  const overlay = new SignalOverlay(document.body);
+
+  overlay.onComplete((artifact) => {
+    if (app) {
+      app.setArtifact(artifact);
+      app.setAutoOrbit(false);
+    }
   });
 });
 
