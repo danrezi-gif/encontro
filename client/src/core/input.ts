@@ -7,6 +7,7 @@ import * as THREE from "three";
 export class InputManager {
   private renderer: THREE.WebGLRenderer;
   private camera: THREE.PerspectiveCamera;
+  private enabled = true;
 
   // Non-XR fallback: mouse look
   private isPointerLocked = false;
@@ -24,10 +25,18 @@ export class InputManager {
     this.setupDesktopControls();
   }
 
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    if (!enabled && this.isPointerLocked) {
+      document.exitPointerLock();
+    }
+  }
+
   private setupDesktopControls(): void {
     const canvas = this.renderer.domElement;
 
     canvas.addEventListener("click", () => {
+      if (!this.enabled) return;
       if (!this.renderer.xr.isPresenting) {
         canvas.requestPointerLock();
       }
@@ -38,7 +47,7 @@ export class InputManager {
     });
 
     document.addEventListener("mousemove", (event) => {
-      if (!this.isPointerLocked) return;
+      if (!this.isPointerLocked || !this.enabled) return;
       this.euler.setFromQuaternion(this.camera.quaternion);
       this.euler.y -= event.movementX * 0.002;
       this.euler.x -= event.movementY * 0.002;
@@ -47,6 +56,7 @@ export class InputManager {
     });
 
     document.addEventListener("keydown", (event) => {
+      if (!this.enabled) return;
       this.handleKey(event.code, true);
     });
 
@@ -77,6 +87,8 @@ export class InputManager {
   }
 
   update(delta: number, _elapsed: number): void {
+    if (!this.enabled) return;
+
     // Desktop fallback movement (ignored in WebXR — headset tracking takes over)
     if (!this.renderer.xr.isPresenting && this.isPointerLocked) {
       const direction = new THREE.Vector3();

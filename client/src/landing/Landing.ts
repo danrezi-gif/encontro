@@ -47,10 +47,10 @@ export class Landing {
 
     // Title
     const title = document.createElement("h1");
-    title.textContent = "encontro";
+    title.textContent = "e.n.c.o.n.t.r.o";
     title.style.cssText = `
-      font-size: 2.5rem; font-weight: 300;
-      letter-spacing: 0.35em; color: rgba(255,255,255,0.7);
+      font-size: 2.2rem; font-weight: 300;
+      letter-spacing: 0.15em; color: rgba(255,255,255,0.7);
       margin: 0 0 12px 0;
       text-transform: lowercase;
     `;
