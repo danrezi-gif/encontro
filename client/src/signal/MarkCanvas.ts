@@ -27,6 +27,7 @@ export class MarkCanvas {
   private colorHue = 0; // passed in from color step
 
   private onChangeCallback?: (profile: MarkProfile) => void;
+  private boundResize = () => this.resize();
 
   constructor(parent: HTMLElement, colorHue = 220) {
     this.colorHue = colorHue;
@@ -67,7 +68,7 @@ export class MarkCanvas {
 
     this.setupEventListeners();
     this.resize();
-    window.addEventListener("resize", () => this.resize());
+    window.addEventListener("resize", this.boundResize);
   }
 
   onChange(cb: (profile: MarkProfile) => void): void {
@@ -339,7 +340,7 @@ export class MarkCanvas {
   }
 
   dispose(): void {
-    window.removeEventListener("resize", () => this.resize());
+    window.removeEventListener("resize", this.boundResize);
     this.container.remove();
   }
 }

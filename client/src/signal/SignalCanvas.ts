@@ -103,7 +103,6 @@ export class SignalCanvas {
     const step = this.currentStep;
     const meta = STEP_META[step];
     const stepIndex = STEP_ORDER.indexOf(step);
-    const totalSteps = STEP_ORDER.length - 1; // exclude "complete"
 
     // Progress dots (not on complete screen)
     const progressHTML =
@@ -355,7 +354,7 @@ export class SignalCanvas {
     }
   }
 
-  private handleNext(skip = false): void {
+  private handleNext(_skip = false): void {
     const stepIndex = STEP_ORDER.indexOf(this.currentStep);
 
     if (this.currentStep === "complete") {

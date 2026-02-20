@@ -27,6 +27,7 @@ export class ColorMixer {
   private isDragging = false;
 
   private onChangeCallback?: (profile: ColorProfile) => void;
+  private boundResize = () => this.resize();
 
   constructor(parent: HTMLElement) {
     this.container = document.createElement("div");
@@ -51,7 +52,7 @@ export class ColorMixer {
 
     this.setupEventListeners();
     this.resize();
-    window.addEventListener("resize", () => this.resize());
+    window.addEventListener("resize", this.boundResize);
   }
 
   onChange(cb: (profile: ColorProfile) => void): void {
@@ -285,7 +286,7 @@ export class ColorMixer {
   }
 
   dispose(): void {
-    window.removeEventListener("resize", () => this.resize());
+    window.removeEventListener("resize", this.boundResize);
     this.container.remove();
   }
 }
