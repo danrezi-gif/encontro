@@ -111,7 +111,9 @@ export class SonicBuilder {
   private container: HTMLElement;
   private activeTones: Set<number> = new Set();
   private synths: Map<number, Tone.Synth | Tone.AMSynth> = new Map();
+  private audioNodes: Map<number, { volume: Tone.Volume; reverb: Tone.Reverb }> = new Map();
   private isAudioStarted = false;
+  private isDisposed = false;
   private colorHue = 220;
   private onChangeCallback?: (profile: SonicProfile) => void;
 
@@ -179,11 +181,17 @@ export class SonicBuilder {
       // Deactivate
       this.activeTones.delete(id);
       const synth = this.synths.get(id);
+      const nodes = this.audioNodes.get(id);
       if (synth) {
         synth.triggerRelease();
         setTimeout(() => {
           synth.dispose();
           this.synths.delete(id);
+          if (nodes) {
+            nodes.reverb.dispose();
+            nodes.volume.dispose();
+            this.audioNodes.delete(id);
+          }
         }, 500);
       }
     } else {
@@ -216,6 +224,7 @@ export class SonicBuilder {
       },
     }).connect(reverb);
 
+    this.audioNodes.set(primitive.id, { volume, reverb });
     return synth;
   }
 
@@ -270,6 +279,8 @@ export class SonicBuilder {
 
     let frame = 0;
     const animate = () => {
+      if (this.isDisposed || !canvas.isConnected) return;
+
       canvas.width = canvas.offsetWidth;
       canvas.height = canvas.offsetHeight;
       const w = canvas.width;
@@ -361,11 +372,17 @@ export class SonicBuilder {
   }
 
   dispose(): void {
+    this.isDisposed = true;
     for (const synth of this.synths.values()) {
       synth.triggerRelease();
       synth.dispose();
     }
     this.synths.clear();
+    for (const nodes of this.audioNodes.values()) {
+      nodes.reverb.dispose();
+      nodes.volume.dispose();
+    }
+    this.audioNodes.clear();
     this.container.remove();
   }
 }

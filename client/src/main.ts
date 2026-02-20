@@ -1,5 +1,6 @@
 import { App } from "./core/app";
 import { SignalCanvas } from "./signal/SignalCanvas";
+import { Landing } from "./landing/Landing";
 import type { SignalArtifact } from "@shared/SignalArtifact";
 
 const canvas = document.getElementById("encontro-canvas") as HTMLCanvasElement;
@@ -10,19 +11,20 @@ if (!canvas) {
 let app: App | null = null;
 
 /**
- * Signal Canvas appears first.
- * When the user completes their signal artifact, the WebXR encounter
- * app starts with the artifact seeding the presence aesthetics.
+ * Landing page appears first — sets the atmosphere.
+ * When the user chooses to enter, the Signal Canvas begins.
+ * On artifact completion, the WebXR encounter app starts.
  */
-const signal = new SignalCanvas(document.body);
+const landing = new Landing(document.body);
 
-signal.onComplete((artifact: SignalArtifact) => {
-  // Store artifact for use in the encounter layer
-  (window as unknown as Record<string, unknown>).__encontroArtifact = artifact;
+landing.onEnter(() => {
+  const signal = new SignalCanvas(document.body);
 
-  // Start the Three.js / WebXR encounter app
-  app = new App(canvas, artifact);
-  app.start();
+  signal.onComplete((artifact: SignalArtifact) => {
+    // Start the Three.js / WebXR encounter app
+    app = new App(canvas, artifact);
+    app.start();
+  });
 });
 
 // Clean up on page unload
