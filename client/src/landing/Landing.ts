@@ -72,13 +72,13 @@ export class Landing {
       max-width: 320px; margin: 0 0 56px 0;
     `;
     desc.textContent =
-      "you will create a signal — color, gesture, sound, intention — " +
-      "an expressive artifact of your current state. " +
-      "not your identity. just this moment.";
+      "you will become a field of light. " +
+      "move your arms to create ripples of energy. " +
+      "there is no body here — only presence.";
 
     // Enter button
     const enterBtn = document.createElement("button");
-    enterBtn.textContent = "begin";
+    enterBtn.textContent = "enter";
     enterBtn.style.cssText = `
       font-size: 0.8rem; font-weight: 300;
       letter-spacing: 0.15em; color: rgba(255,255,255,0.5);
@@ -103,7 +103,7 @@ export class Landing {
 
     // Version tag
     const version = document.createElement("p");
-    version.textContent = "phase 0 — signal canvas";
+    version.textContent = "phase 1 — energy field";
     version.style.cssText = `
       font-size: 0.6rem; font-weight: 300;
       letter-spacing: 0.15em; color: rgba(255,255,255,0.08);
