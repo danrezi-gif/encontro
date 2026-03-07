@@ -1,20 +1,37 @@
 import * as THREE from "three";
 
 /**
- * EnergyField — the user's visible self as a dynamic cloud of luminous particles.
+ * EnergyField — the user's visible self as a flowing iridescent volume.
  *
- * No body, no hands, no avatar — just a living field of light centered on
- * the user's tracked position. Particles orbit, breathe, and respond to
- * movement velocity. When hands move, particles near that region scatter
- * and glow brighter, creating a sense of embodied energy without literal form.
+ * Inspired by raymarched iridescent distance fields (Shadertoy "rotate i" style).
+ * Instead of thousands of discrete particles, the user is surrounded by a
+ * continuous luminous form — prismatic light that flows, breathes, and reacts
+ * to hand movement. The iridescence comes from view-angle-dependent color
+ * using dot-product hue shifting.
  *
- * Uses InstancedBufferGeometry + custom ShaderMaterial for GPU performance.
+ * Rendered on an icosphere mesh centered on the user, with raymarching
+ * happening in the fragment shader using the mesh surface as the entry point.
  */
 
-const VERTEX_SHADER = /* glsl */ `
+const VERTEX = /* glsl */ `
+  varying vec3 vWorldPos;
+  varying vec3 vLocalPos;
+  varying vec3 vNormal;
+
+  void main() {
+    vLocalPos = position;
+    vNormal = normalize(normalMatrix * normal);
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vWorldPos = worldPos.xyz;
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+  }
+`;
+
+const FRAGMENT = /* glsl */ `
+  precision highp float;
+
   uniform float uTime;
   uniform float uBreath;
-  uniform float uMovementIntensity;
   uniform vec3 uHeadPos;
   uniform vec3 uLeftHandPos;
   uniform vec3 uRightHandPos;
@@ -22,142 +39,157 @@ const VERTEX_SHADER = /* glsl */ `
   uniform float uRightHandActive;
   uniform float uLeftHandSpeed;
   uniform float uRightHandSpeed;
+  uniform float uMovementIntensity;
 
-  attribute vec3 offset;
-  attribute float seed;
-  attribute float orbitSpeed;
-  attribute float orbitRadius;
-  attribute float particleSize;
+  varying vec3 vWorldPos;
+  varying vec3 vLocalPos;
+  varying vec3 vNormal;
 
-  varying float vAlpha;
-  varying float vGlow;
-  varying vec3 vColor;
+  #define PI 3.141596
+  #define TAU 6.283185
 
-  // Simplex-like noise for organic motion
-  float hash(float n) { return fract(sin(n) * 43758.5453123); }
+  // Rotation matrix for domain warping
+  mat2 rotate(float a) {
+    float s = sin(a);
+    float c = cos(a);
+    return mat2(c, -s, s, c);
+  }
+
+  // FBM noise for organic distortion
+  float fbm(vec3 p) {
+    float n = 0.0;
+    for (int i = 0; i < 4; i++) {
+      n += abs(dot(cos(p), vec3(0.1)));
+      p *= 1.8;
+    }
+    return n;
+  }
 
   void main() {
-    float t = uTime;
+    float T = uTime;
 
-    // Base orbital motion around the offset point
-    float angle = t * orbitSpeed + seed * 6.2831;
-    float angle2 = t * orbitSpeed * 0.7 + seed * 3.14;
-    vec3 orbit = vec3(
-      cos(angle) * orbitRadius,
-      sin(angle2) * orbitRadius * 0.6,
-      sin(angle) * orbitRadius
-    );
+    // Ray from camera through this fragment
+    vec3 ro = cameraPosition;
+    vec3 rd = normalize(vWorldPos - cameraPosition);
 
-    // Breathing — expand/contract rhythmically
-    float breath = 1.0 + uBreath * 0.15 * sin(t * 0.8 + seed * 6.28);
+    // Raymarch volume centered on head position
+    vec3 center = uHeadPos;
+    float zMax = 1.5;  // max march depth (volume radius)
+    float z = 0.05;
 
-    // Particle world position
-    vec3 particlePos = uHeadPos + (offset + orbit) * breath;
+    vec3 col = vec3(0.0);
+    float totalAlpha = 0.0;
 
-    // Hand influence — particles near active hands get pulled and energized
-    float handInfluence = 0.0;
-    float handGlow = 0.0;
+    // Start from the mesh surface
+    vec3 entryPoint = vWorldPos;
+    float entryDist = length(entryPoint - center);
 
-    if (uLeftHandActive > 0.5) {
-      float dL = distance(particlePos, uLeftHandPos);
-      float influenceL = smoothstep(0.8, 0.05, dL);
-      // Push particles outward from hand, proportional to hand speed
-      vec3 dirL = normalize(particlePos - uLeftHandPos + vec3(0.001));
-      particlePos += dirL * influenceL * uLeftHandSpeed * 0.3;
-      handInfluence += influenceL;
-      handGlow += influenceL * uLeftHandSpeed;
+    // Only march if we're within the volume
+    if (entryDist > zMax * 2.0) discard;
+
+    // Breathing modulation
+    float breathScale = 1.0 + uBreath * 0.1;
+
+    for (float i = 0.0; i < 60.0; i++) {
+      vec3 p = entryPoint + rd * z;
+
+      // Relative to field center
+      vec3 rp = (p - center) / breathScale;
+
+      // Hand influence — warp space near hands
+      if (uLeftHandActive > 0.5) {
+        vec3 toHand = p - uLeftHandPos;
+        float handDist = length(toHand);
+        float influence = smoothstep(0.8, 0.0, handDist);
+        // Swirl space around hand
+        rp.xz *= rotate(influence * uLeftHandSpeed * 2.0);
+        rp.yz *= rotate(influence * uLeftHandSpeed * 1.3);
+        // Push density outward
+        rp += normalize(toHand + vec3(0.001)) * influence * uLeftHandSpeed * 0.2;
+      }
+
+      if (uRightHandActive > 0.5) {
+        vec3 toHand = p - uRightHandPos;
+        float handDist = length(toHand);
+        float influence = smoothstep(0.8, 0.0, handDist);
+        rp.xz *= rotate(-influence * uRightHandSpeed * 2.0);
+        rp.yz *= rotate(-influence * uRightHandSpeed * 1.3);
+        rp += normalize(toHand + vec3(0.001)) * influence * uRightHandSpeed * 0.2;
+      }
+
+      // Domain rotation — creates the flowing, twisting form
+      rp.xz *= rotate(T * 0.3 + i * 0.02);
+      rp.yz *= rotate(T * 0.2 + i * 0.015);
+
+      // Distance field with FBM distortion
+      float d = length(rp) - 0.4;
+      d = abs(d) * 0.6 + 0.01;
+
+      // FBM adds organic complexity
+      d += fbm(rp * 1.8 + T * 0.2) * 0.2;
+
+      // Iridescent color — view-angle and position-dependent
+      // This is the key technique from the reference:
+      // color shifts based on dot product of position with a constant,
+      // creating prismatic rainbow refraction
+      vec3 iridescence = (1.1 + sin(vec3(3.0, 2.0, 1.0) + dot(rp, vec3(1.0)) + T * 0.5)) / d;
+
+      // Hand proximity warm shift
+      float handWarmth = 0.0;
+      if (uLeftHandActive > 0.5) {
+        float dL = distance(p, uLeftHandPos);
+        handWarmth += smoothstep(0.6, 0.0, dL) * uLeftHandSpeed;
+      }
+      if (uRightHandActive > 0.5) {
+        float dR = distance(p, uRightHandPos);
+        handWarmth += smoothstep(0.6, 0.0, dR) * uRightHandSpeed;
+      }
+      handWarmth = min(handWarmth, 1.0);
+
+      // Warm shift near hands
+      vec3 warmShift = vec3(0.3, 0.1, -0.2) * handWarmth;
+      iridescence += warmShift;
+
+      // Accumulate color with depth-based falloff
+      float density = 1.0 / (d * d * 200.0 + 1.0);
+      col += iridescence * density * 0.035;
+      totalAlpha += density * 0.04;
+
+      // Adaptive step — larger steps in empty space
+      z += max(d * 0.5, 0.01);
+
+      if (z > zMax) break;
     }
 
-    if (uRightHandActive > 0.5) {
-      float dR = distance(particlePos, uRightHandPos);
-      float influenceR = smoothstep(0.8, 0.05, dR);
-      vec3 dirR = normalize(particlePos - uRightHandPos + vec3(0.001));
-      particlePos += dirR * influenceR * uRightHandSpeed * 0.3;
-      handInfluence += influenceR;
-      handGlow += influenceR * uRightHandSpeed;
-    }
+    // Tone mapping
+    col = tanh(col * 0.8);
 
-    // Movement response — faster movement = wider dispersion
-    float dispersion = 1.0 + uMovementIntensity * 0.5;
-    particlePos = uHeadPos + (particlePos - uHeadPos) * dispersion;
-
-    // Gentle turbulence
-    float turbulence = hash(seed * 100.0 + t * 0.3) * 0.02;
-    particlePos += vec3(
-      sin(t * 0.5 + seed * 10.0) * turbulence,
-      cos(t * 0.3 + seed * 7.0) * turbulence,
-      sin(t * 0.4 + seed * 13.0) * turbulence
-    );
-
-    vec4 mvPosition = modelViewMatrix * vec4(particlePos, 1.0);
-
-    // Distance-based alpha — particles fade at edges
-    float distFromCenter = length(offset + orbit);
-    float coreAlpha = smoothstep(0.7, 0.0, distFromCenter);
-    float edgeAlpha = smoothstep(1.2, 0.5, distFromCenter) * 0.3;
-    vAlpha = mix(edgeAlpha, coreAlpha, 0.6);
+    // Edge fade — soften the volume boundary
+    float edgeFade = smoothstep(zMax, zMax * 0.3, length(entryPoint - center));
+    totalAlpha *= edgeFade;
 
     // Breathing alpha modulation
-    vAlpha *= 0.5 + 0.5 * sin(t * 0.8 + seed * 6.28);
-    vAlpha = max(vAlpha, 0.05);
+    totalAlpha *= 0.7 + uBreath * 0.3;
 
-    // Hand proximity boost
-    vAlpha += handInfluence * 0.4;
-    vAlpha = min(vAlpha, 1.0);
+    // Movement intensity boost
+    totalAlpha *= 1.0 + uMovementIntensity * 0.5;
 
-    // Glow from hand movement
-    vGlow = clamp(handGlow, 0.0, 1.0);
+    totalAlpha = clamp(totalAlpha, 0.0, 0.85);
 
-    // Color: base cool blue-white, warm shift near active hands
-    vec3 baseColor = vec3(0.55, 0.7, 1.0); // cool blue-white
-    vec3 warmColor = vec3(1.0, 0.85, 0.6);  // warm gold
-    vec3 hotColor = vec3(1.0, 0.5, 0.3);    // hot orange for fast movement
-    vColor = mix(baseColor, warmColor, handInfluence * 0.5);
-    vColor = mix(vColor, hotColor, vGlow * 0.3);
+    // Discard near-invisible fragments
+    if (totalAlpha < 0.005) discard;
 
-    // Size: base + breath + hand glow
-    float size = particleSize * (0.8 + uBreath * 0.2) * (1.0 + handGlow * 2.0);
-    gl_PointSize = size * (300.0 / -mvPosition.z);
-    gl_Position = projectionMatrix * mvPosition;
-  }
-`;
-
-const FRAGMENT_SHADER = /* glsl */ `
-  varying float vAlpha;
-  varying float vGlow;
-  varying vec3 vColor;
-
-  void main() {
-    // Soft circular particle with glow falloff
-    vec2 center = gl_PointCoord - vec2(0.5);
-    float dist = length(center);
-    if (dist > 0.5) discard;
-
-    // Soft radial falloff
-    float softEdge = 1.0 - smoothstep(0.0, 0.5, dist);
-    float coreGlow = exp(-dist * dist * 8.0);
-
-    // Combine core brightness with soft halo
-    float intensity = mix(softEdge * 0.5, coreGlow, 0.6 + vGlow * 0.4);
-
-    vec3 color = vColor * intensity;
-
-    // Add white-hot core for high-glow particles
-    color += vec3(1.0) * coreGlow * vGlow * 0.5;
-
-    float alpha = vAlpha * intensity;
-    gl_FragColor = vec4(color, alpha);
+    gl_FragColor = vec4(col, totalAlpha);
   }
 `;
 
 export class EnergyField {
   readonly group: THREE.Group;
-  private points: THREE.Points;
-  private geometry: THREE.BufferGeometry;
+  private mesh: THREE.Mesh;
+  private geometry: THREE.IcosahedronGeometry;
   private material: THREE.ShaderMaterial;
-  private particleCount: number;
 
-  // External inputs updated each frame
+  // External inputs
   private headPos = new THREE.Vector3(0, 1.6, 0);
   private leftHandPos = new THREE.Vector3();
   private rightHandPos = new THREE.Vector3();
@@ -167,47 +199,18 @@ export class EnergyField {
   private rightHandSpeed = 0;
   private movementIntensity = 0;
 
-  constructor(particleCount = 3000) {
+  constructor() {
     this.group = new THREE.Group();
-    this.particleCount = particleCount;
 
-    const offsets = new Float32Array(particleCount * 3);
-    const seeds = new Float32Array(particleCount);
-    const orbitSpeeds = new Float32Array(particleCount);
-    const orbitRadii = new Float32Array(particleCount);
-    const sizes = new Float32Array(particleCount);
-
-    for (let i = 0; i < particleCount; i++) {
-      // Gaussian-distributed offsets — dense core, sparse edges
-      const r = gaussianRandom() * 0.4;
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-
-      offsets[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-      offsets[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta) - 0.2; // slightly below head
-      offsets[i * 3 + 2] = r * Math.cos(phi);
-
-      seeds[i] = Math.random();
-      orbitSpeeds[i] = 0.3 + Math.random() * 0.8;
-      orbitRadii[i] = 0.02 + Math.random() * 0.08;
-      sizes[i] = 0.01 + Math.random() * 0.04;
-    }
-
-    this.geometry = new THREE.BufferGeometry();
-    this.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(particleCount * 3), 3));
-    this.geometry.setAttribute("offset", new THREE.BufferAttribute(offsets, 3));
-    this.geometry.setAttribute("seed", new THREE.BufferAttribute(seeds, 1));
-    this.geometry.setAttribute("orbitSpeed", new THREE.BufferAttribute(orbitSpeeds, 1));
-    this.geometry.setAttribute("orbitRadius", new THREE.BufferAttribute(orbitRadii, 1));
-    this.geometry.setAttribute("particleSize", new THREE.BufferAttribute(sizes, 1));
+    // Icosphere volume container — large enough to encompass the user
+    this.geometry = new THREE.IcosahedronGeometry(1.2, 4);
 
     this.material = new THREE.ShaderMaterial({
-      vertexShader: VERTEX_SHADER,
-      fragmentShader: FRAGMENT_SHADER,
+      vertexShader: VERTEX,
+      fragmentShader: FRAGMENT,
       uniforms: {
         uTime: { value: 0 },
         uBreath: { value: 0 },
-        uMovementIntensity: { value: 0 },
         uHeadPos: { value: new THREE.Vector3(0, 1.6, 0) },
         uLeftHandPos: { value: new THREE.Vector3() },
         uRightHandPos: { value: new THREE.Vector3() },
@@ -215,18 +218,19 @@ export class EnergyField {
         uRightHandActive: { value: 0 },
         uLeftHandSpeed: { value: 0 },
         uRightHandSpeed: { value: 0 },
+        uMovementIntensity: { value: 0 },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
+      side: THREE.BackSide, // Render inside of sphere — we're inside it
     });
 
-    this.points = new THREE.Points(this.geometry, this.material);
-    this.points.frustumCulled = false; // always render — it's centered on user
-    this.group.add(this.points);
+    this.mesh = new THREE.Mesh(this.geometry, this.material);
+    this.mesh.frustumCulled = false;
+    this.group.add(this.mesh);
   }
 
-  /** Update tracking inputs — call before update() */
   setTracking(
     headPos: THREE.Vector3,
     leftHandPos: THREE.Vector3,
@@ -248,6 +252,10 @@ export class EnergyField {
   }
 
   update(_delta: number, elapsed: number): void {
+    // Move the mesh to follow the user
+    this.mesh.position.copy(this.headPos);
+    this.mesh.position.y -= 0.2; // center slightly below head (torso area)
+
     const u = this.material.uniforms;
     u.uTime.value = elapsed;
     u.uBreath.value = Math.sin(elapsed * 0.8) * 0.5 + 0.5;
@@ -265,10 +273,4 @@ export class EnergyField {
     this.geometry.dispose();
     this.material.dispose();
   }
-}
-
-function gaussianRandom(): number {
-  const u1 = Math.random();
-  const u2 = Math.random();
-  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
 }

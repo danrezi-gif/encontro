@@ -4,6 +4,7 @@ import { createRenderer } from "./renderer";
 import { InputManager } from "./input";
 import { XRSessionManager } from "../xr/XRSessionManager";
 import { EnergyField } from "../presence/EnergyField";
+import { EnergyFieldBokeh } from "../presence/EnergyFieldBokeh";
 import { LightTrail } from "../presence/LightTrail";
 import { CosmicSky } from "../environment/CosmicSky";
 import { DarkMeadow } from "../environment/DarkMeadow";
@@ -12,10 +13,12 @@ import { DarkMeadow } from "../environment/DarkMeadow";
  * Main application — bootstraps the Three.js scene, WebXR session,
  * energy field presence, and the animation loop.
  *
- * When the user clicks "enter", the 3D world starts rendering.
- * A VR button appears that takes the user into immersive WebXR.
- * In VR, the user sees themselves as a field of luminous energy particles.
- * No hands, no controllers — only light.
+ * The user's presence is rendered as two layered fields:
+ * - EnergyField: raymarched iridescent volume (inner core, prismatic liquid light)
+ * - EnergyFieldBokeh: flowing bokeh gradient orbs (outer aura, soft color blobs)
+ *
+ * Both react to hand tracking and movement. The light trail adds
+ * ephemeral traces from arm sweeps.
  */
 export class App {
   private renderer: THREE.WebGLRenderer;
@@ -25,6 +28,7 @@ export class App {
   private input: InputManager;
   private xr: XRSessionManager;
   private energyField: EnergyField;
+  private energyFieldBokeh: EnergyFieldBokeh;
   private lightTrail: LightTrail;
   private cosmicSky: CosmicSky;
   private darkMeadow: DarkMeadow;
@@ -47,16 +51,21 @@ export class App {
     // XR session manager — handles VR lifecycle and hand tracking
     this.xr = new XRSessionManager(this.renderer);
 
-    // Energy field — the user's luminous self
-    this.energyField = new EnergyField(3000);
+    // Energy fields — layered for depth
+    // Inner: raymarched iridescent volume (prismatic liquid core)
+    this.energyField = new EnergyField();
     this.scene.add(this.energyField.group);
+
+    // Outer: flowing bokeh gradient orbs (soft aura)
+    this.energyFieldBokeh = new EnergyFieldBokeh();
+    this.scene.add(this.energyFieldBokeh.group);
 
     // Light trail — ephemeral traces from hand movement
     this.lightTrail = new LightTrail(2000);
     this.scene.add(this.lightTrail.group);
 
     // Environment
-    this.cosmicSky = new CosmicSky(800);
+    this.cosmicSky = new CosmicSky(2500);
     this.scene.add(this.cosmicSky.group);
 
     this.darkMeadow = new DarkMeadow();
@@ -136,18 +145,24 @@ export class App {
       this.rightHandSpeedSmooth = this.movementIntensitySmooth * 2;
     }
 
-    // Feed tracking data into energy field
-    this.energyField.setTracking(
-      headPos,
-      leftHandPos,
-      rightHandPos,
-      leftActive,
-      rightActive,
-      this.leftHandSpeedSmooth,
-      this.rightHandSpeedSmooth,
+    // Tracking data shared by both energy field layers
+    const trackingArgs: [
+      THREE.Vector3, THREE.Vector3, THREE.Vector3,
+      boolean, boolean,
+      number, number, number,
+    ] = [
+      headPos, leftHandPos, rightHandPos,
+      leftActive, rightActive,
+      this.leftHandSpeedSmooth, this.rightHandSpeedSmooth,
       this.movementIntensitySmooth,
-    );
+    ];
+
+    // Update both energy field layers
+    this.energyField.setTracking(...trackingArgs);
     this.energyField.update(delta, elapsed);
+
+    this.energyFieldBokeh.setTracking(...trackingArgs);
+    this.energyFieldBokeh.update(delta, elapsed);
 
     // Emit light trails from hand movement
     this.lightTrail.emit(
@@ -253,6 +268,7 @@ export class App {
     window.removeEventListener("resize", this.handleResize);
     this.xr.dispose();
     this.energyField.dispose();
+    this.energyFieldBokeh.dispose();
     this.lightTrail.dispose();
     this.cosmicSky.dispose();
     this.darkMeadow.dispose();
