@@ -76,21 +76,21 @@ const FRAGMENT = /* glsl */ `
     // Also compute distance from user (for base proximity glow)
     float userDist = distance(gp, up);
 
-    // Scale pool with height — like a spotlight widening from above
-    float poolScale = 1.0 + heightAbove * 0.8;
+    // Scale pool with height — moderate widening, not too aggressive
+    float poolScale = 1.0 + heightAbove * 0.25;
     float scaledDist = dist / poolScale;
     float scaledUserDist = userDist / poolScale;
 
     // ── Main bioluminescent pool ───────────────────────────────
     float n = fbm2(gp * 0.8 + vec2(uTime * 0.05, uTime * 0.03));
-    float poolShape = smoothstep(4.0 + n * 1.2, 0.3, scaledDist);
+    float poolShape = smoothstep(2.5 + n * 0.8, 0.2, scaledDist);
 
-    // Inner core — wider
-    float innerGlow = smoothstep(2.0 + n * 0.6, 0.0, scaledDist);
+    // Inner core
+    float innerGlow = smoothstep(1.2 + n * 0.4, 0.0, scaledDist);
     innerGlow = pow(innerGlow, 1.5);
 
     // Ambient base glow under user (always present, doesn't shift as much)
-    float baseGlow = smoothstep(5.0, 0.5, scaledUserDist) * 0.3;
+    float baseGlow = smoothstep(3.0, 0.5, scaledUserDist) * 0.3;
 
     // Stretch pool along gesture direction
     if (gestureLen > 0.01) {
@@ -107,20 +107,23 @@ const FRAGMENT = /* glsl */ `
     }
 
     // ── Ripples ────────────────────────────────────────────────
-    float ripple = sin(dist * 4.0 - uTime * 1.2 + n * 3.0) * 0.5 + 0.5;
-    ripple *= smoothstep(6.0, 0.5, scaledDist) * 0.3;
+    float ripple = sin(dist * 6.0 - uTime * 1.2 + n * 3.0) * 0.5 + 0.5;
+    ripple *= smoothstep(4.0, 0.5, scaledDist) * 0.3;
 
     // ── Organic vein patterns ──────────────────────────────────
     float veins = fbm2(gp * 2.5 + vec2(uTime * 0.02));
     float veinPattern = 1.0 - abs(veins - 0.5) * 2.0;
     veinPattern = pow(max(veinPattern, 0.0), 4.0);
-    veinPattern *= smoothstep(6.0, 0.5, scaledDist) * 0.2;
+    veinPattern *= smoothstep(3.5, 0.5, scaledDist) * 0.2;
 
-    // ── Brightness — gentle dimming at altitude (spotlight stays visible) ──
-    float heightDim = 1.0 / (1.0 + heightAbove * 0.05);
+    // ── Brightness ─────────────────────────────────────────────
+    float heightDim = 1.0 / (1.0 + heightAbove * 0.12);
+
+    // ── Distance fade — hide plane edges, infinite horizon illusion ──
+    float edgeFade = smoothstep(90.0, 40.0, length(gp));
 
     float intensity = (poolShape * 0.4 + innerGlow * 0.6 + baseGlow + ripple + veinPattern)
-                    * heightDim * gestureDim;
+                    * heightDim * gestureDim * edgeFade;
 
     // Color
     vec3 poolDeep   = vec3(0.08, 0.12, 0.35);
@@ -136,7 +139,9 @@ const FRAGMENT = /* glsl */ `
 
     vec3 finalColor = groundDark + groundNoise + poolColor * intensity;
 
-    gl_FragColor = vec4(finalColor, 0.95);
+    // Fade alpha at distance so plane dissolves into void
+    float alphaFade = smoothstep(95.0, 50.0, length(gp));
+    gl_FragColor = vec4(finalColor, 0.95 * alphaFade);
   }
 `;
 
@@ -159,6 +164,7 @@ export class DarkMeadow {
         uUserPos: { value: new THREE.Vector3(0, 1.6, 0) },
         uGestureDir: { value: new THREE.Vector3() },
       },
+      transparent: true,
     });
 
     const plane = new THREE.Mesh(geometry, this.material);
