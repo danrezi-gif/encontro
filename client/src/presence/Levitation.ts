@@ -37,7 +37,7 @@ export class Levitation {
   /** Seconds before flight begins */
   private readonly GROUNDING_DURATION = 1.5;
   /** Gentle initial lift speed (m/s) — soft start before head takes over */
-  private readonly INITIAL_LIFT = 0.15;
+  private readonly INITIAL_LIFT = 0.3;
   /** Base thrust when hands are at rest (m/s²) — gentle drift in look dir */
   private readonly BASE_THRUST = 0.08;
   /** Thrust gain from hand extension (m/s² per unit) */
@@ -45,9 +45,13 @@ export class Levitation {
   /** How much head direction steers (lerp factor per second) */
   private readonly STEER_RATE = 2.5;
   /** Maximum speed (m/s) */
-  private readonly MAX_SPEED = 1.2;
-  /** Velocity damping — dreamy deceleration */
-  private readonly DAMPING = 0.92;
+  private readonly MAX_SPEED = 3.0;
+  /**
+   * Per-frame velocity retention at 60 fps, used as Math.pow(DAMPING, delta*60).
+   * 0.996 → ~70 % velocity retained per second (≈3 s half-life) — dreamy glide.
+   * Previous value 0.92 gave only 0.7 % retained/s, killing all motion in <0.2 s.
+   */
+  private readonly DAMPING = 0.996;
   /** Lateral hand steering gain */
   private readonly LATERAL_GAIN = 0.4;
   /** Minimum upward bias so user doesn't crash into ground */
