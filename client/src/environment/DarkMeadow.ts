@@ -165,11 +165,13 @@ export class DarkMeadow {
         uGestureDir: { value: new THREE.Vector3() },
       },
       transparent: true,
+      depthWrite: false,
     });
 
     const plane = new THREE.Mesh(geometry, this.material);
     plane.rotation.x = -Math.PI / 2;
     plane.position.y = 0;
+    plane.renderOrder = -1; // render before body so additive body isn't occluded
     this.group.add(plane);
   }
 

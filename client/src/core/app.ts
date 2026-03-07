@@ -141,16 +141,15 @@ export class App {
     let leftActive = this.xr.leftHand.active;
     let rightActive = this.xr.rightHand.active;
 
-    // Head forward (horizontal)
-    const headForward = new THREE.Vector3();
+    // Head direction — full 3D (for flight) and horizontal (for ground systems)
+    const headDirection = new THREE.Vector3();
     if (this.xr.isPresenting) {
       const xrCam = this.renderer.xr.getCamera();
-      xrCam.getWorldDirection(headForward);
+      xrCam.getWorldDirection(headDirection);
     } else {
-      this.camera.getWorldDirection(headForward);
+      this.camera.getWorldDirection(headDirection);
     }
-    headForward.y = 0;
-    headForward.normalize();
+    const headForward = new THREE.Vector3(headDirection.x, 0, headDirection.z).normalize();
 
     if (this.xr.isPresenting) {
       leftHandPos.copy(this.xr.leftHand.position);
@@ -235,6 +234,7 @@ export class App {
       leftActive, rightActive,
       this.leftHandSpeedSmooth, this.rightHandSpeedSmooth,
       headForward,
+      headDirection,
     );
 
     this.worldRoot.position.copy(this.levitation.offset);
