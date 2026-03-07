@@ -207,6 +207,7 @@ export class App {
     this.energyField.update(delta, elapsed);
 
     this.energyFieldBokeh.setTracking(...trackingArgs);
+    this.energyFieldBokeh.setHeight(this.levitation.height);
     this.energyFieldBokeh.update(delta, elapsed);
 
     // ── Levitation ──────────────────────────────────────────────
