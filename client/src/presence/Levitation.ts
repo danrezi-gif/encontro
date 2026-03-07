@@ -32,8 +32,19 @@ const THRUST_W_RAISE = 0.30;
 const THRUST_W_SPREAD = 0.20;
 
 // ── Steering ─────────────────────────────────────────────────────────
-/** PARAM: Exponential steering blend rate (higher = snappier turning). */
-const STEER_RATE = 3.0;
+/**
+ * PARAM: Exponential steering blend rate (higher = snappier turning).
+ * At 6.0, velocity direction reaches ~95 % of head direction in ~0.5 s.
+ */
+const STEER_RATE = 6.0;
+
+/**
+ * PARAM: Direct head‑tracking blend (0‑1).
+ * Fraction of thrust applied directly in head direction each frame,
+ * bypassing the velocity‑steering lerp. 0.6 = 60 % of new thrust
+ * goes straight where you look, making turning feel immediate.
+ */
+const HEAD_DIRECT_BLEND = 0.6;
 
 /** PARAM: Lateral hand offset → yaw correction gain. */
 const HAND_STEER_GAIN = 0.5;
@@ -54,7 +65,7 @@ const MAX_ACCEL = 2.0;
  * velocity_xz *= pow(0.5, dt / HALF_LIFE_H) each frame.
  * 2.5 s → dreamy glide that still responds to steering.
  */
-const HALF_LIFE_H = 2.5;
+const HALF_LIFE_H = 1.8;
 
 /**
  * PARAM: Vertical velocity half‑life (seconds).
@@ -323,6 +334,7 @@ export class Levitation {
     flyDir.normalize();
 
     // ── Steer velocity toward desired direction ─────────────────
+    // Exponential blend rotates existing velocity toward head look
     const speed = this.velocity.length();
     if (speed > 0.01) {
       const steerT = 1 - Math.exp(-STEER_RATE * dt);
@@ -335,8 +347,17 @@ export class Levitation {
     const totalThrust = BASE_THRUST + handThrust;
     this._accel.set(0, 0, 0);
 
-    // Thrust in flight direction
-    this._accel.addScaledVector(flyDir, totalThrust);
+    // Split thrust: HEAD_DIRECT_BLEND goes straight in head direction,
+    // the rest follows current velocity direction. This makes turning
+    // the head immediately redirect flight rather than waiting for
+    // the velocity lerp to catch up.
+    this._accel.addScaledVector(flyDir, totalThrust * HEAD_DIRECT_BLEND);
+    if (speed > 0.01) {
+      const velDir2 = this.velocity.clone().normalize();
+      this._accel.addScaledVector(velDir2, totalThrust * (1 - HEAD_DIRECT_BLEND));
+    } else {
+      this._accel.addScaledVector(flyDir, totalThrust * (1 - HEAD_DIRECT_BLEND));
+    }
 
     // Initial lift bias (fades with height)
     if (this.height < INITIAL_LIFT_FADE) {

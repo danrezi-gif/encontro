@@ -14,26 +14,35 @@ import * as THREE from "three";
 
 // ── PARAM: Mist tuning ──────────────────────────────────────────────
 /** Heights (m) at which mist strata form. */
-const STRATA_HEIGHTS = [6, 10, 15, 22, 35, 50, 75];
+const STRATA_HEIGHTS = [6, 10, 15, 22, 35, 50, 75, 100, 130];
 
-/** Number of wisps per stratum. */
-const WISPS_PER_STRATUM = 18;
+/**
+ * Wisps per stratum — scales with height so upper sky is denser.
+ * Index maps to STRATA_HEIGHTS. Higher strata get more wisps.
+ */
+const WISPS_PER_STRATUM: number[] = [12, 14, 18, 22, 28, 34, 38, 42, 46];
 
 /** XZ scatter radius per stratum (m). */
-const SCATTER_RADIUS = 120;
+const SCATTER_RADIUS = 150;
 
 /** Height scatter per stratum (m ±). */
-const HEIGHT_SCATTER = 2.0;
+const HEIGHT_SCATTER = 3.0;
 
 /** Base wisp size (m). */
-const WISP_SIZE_MIN = 8;
-const WISP_SIZE_MAX = 25;
+const WISP_SIZE_MIN = 10;
+const WISP_SIZE_MAX = 35;
 
 /** Wisp base opacity. */
 const WISP_OPACITY = 0.12;
 
 /** How strongly wisps part around the soul (m radius). */
-const PART_RADIUS = 4.0;
+const PART_RADIUS = 5.0;
+
+/** Soul illumination radius on clouds (m). */
+const SOUL_LIGHT_RADIUS = 12.0;
+
+/** Soul illumination intensity on clouds. */
+const SOUL_LIGHT_INTENSITY = 0.8;
 
 const MIST_VERTEX = /* glsl */ `
   attribute float aSize;
@@ -56,13 +65,14 @@ const MIST_VERTEX = /* glsl */ `
     // World position of this vertex
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
 
-    // Proximity to soul — wisps part around user
+    // Proximity to soul — wisps part around user AND illuminate
     float dist = distance(worldPos.xyz, uSoulPos);
-    vProximity = 1.0 - smoothstep(0.0, ${PART_RADIUS.toFixed(1)}, dist);
+    vProximity = 1.0 - smoothstep(0.0, ${SOUL_LIGHT_RADIUS.toFixed(1)}, dist);
 
-    // Push vertices away from soul (parting effect)
+    // Push vertices away from soul (parting effect) — only within close range
+    float partProximity = 1.0 - smoothstep(0.0, ${PART_RADIUS.toFixed(1)}, dist);
     vec3 awayDir = normalize(worldPos.xyz - uSoulPos + vec3(0.001));
-    worldPos.xyz += awayDir * vProximity * 2.5;
+    worldPos.xyz += awayDir * partProximity * 3.0;
 
     // Gentle drift animation
     worldPos.x += sin(uTime * 0.08 + aPhase * 6.28) * 1.5;
@@ -113,30 +123,45 @@ const MIST_FRAGMENT = /* glsl */ `
     vec2 c = vUv - 0.5;
     float r = length(c);
 
-    // Soft circular falloff
-    float circle = smoothstep(0.5, 0.15, r);
+    // ── Soft organic edge (multi-layer noise erodes the boundary) ───
+    // Instead of a hard circular cutoff, use noise to eat into edges
+    vec2 edgeNoiseUV = vUv * 4.0 + vec2(vPhase * 7.0, uTime * 0.02);
+    float edgeNoise = fbm(edgeNoiseUV);
+    // Erode circle edge with noise — creates wispy, non-polygonal boundary
+    float erodedRadius = 0.5 - edgeNoise * 0.2; // varies 0.3 - 0.5
+    float circle = smoothstep(erodedRadius, erodedRadius * 0.3, r);
 
-    // Noise-driven alpha for organic wisp shape
+    // Noise-driven alpha for organic wisp shape (inner detail)
     vec2 noiseUV = vUv * 3.0 + vec2(vPhase * 10.0, uTime * 0.03);
     float n = fbm(noiseUV);
 
+    // Secondary noise layer at different scale for more organic feel
+    float n2 = fbm(vUv * 1.5 + vec2(uTime * 0.015, vPhase * 5.0));
+
     // Wispy shape: threshold noise for holes and tendrils
-    float wisp = smoothstep(0.35, 0.6, n);
+    float wisp = smoothstep(0.3, 0.55, n) * smoothstep(0.2, 0.5, n2);
 
     // Near the soul, wisps become more transparent (parting)
     float partFade = 1.0 - vProximity * 0.8;
 
     float alpha = circle * wisp * vOpacity * partFade;
 
+    // ── Soul illumination — clouds light up when soul passes ───
+    float soulLight = vProximity * ${SOUL_LIGHT_INTENSITY.toFixed(1)};
+
     // Luminous blue-white color, slightly warmer at edges
-    vec3 color = mix(
-      vec3(0.25, 0.35, 0.65),  // edge
-      vec3(0.5, 0.6, 0.85),    // core
+    vec3 baseColor = mix(
+      vec3(0.2, 0.3, 0.55),   // edge
+      vec3(0.45, 0.55, 0.8),  // core
       circle * wisp
     );
 
-    // Faint glow when soul is nearby
-    color += vec3(0.15, 0.2, 0.35) * vProximity;
+    // Soul light adds warm white glow to nearby clouds
+    vec3 soulLightColor = vec3(0.5, 0.55, 0.75) * soulLight;
+    // Also boost alpha where soul illuminates
+    alpha += circle * soulLight * 0.15;
+
+    vec3 color = baseColor + soulLightColor;
 
     gl_FragColor = vec4(color, alpha);
   }
@@ -169,8 +194,10 @@ export class EtherealMist {
   private createWisps(): void {
     const baseGeo = new THREE.PlaneGeometry(1, 1);
 
-    for (const stratumH of STRATA_HEIGHTS) {
-      for (let i = 0; i < WISPS_PER_STRATUM; i++) {
+    for (let si = 0; si < STRATA_HEIGHTS.length; si++) {
+      const stratumH = STRATA_HEIGHTS[si];
+      const wispCount = WISPS_PER_STRATUM[si] ?? 18;
+      for (let i = 0; i < wispCount; i++) {
         // Random position in stratum
         const angle = Math.random() * Math.PI * 2;
         const radius = Math.random() * SCATTER_RADIUS;
