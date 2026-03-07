@@ -1,16 +1,12 @@
 import * as THREE from "three";
 
 /**
- * EnergyFieldBokeh — flowing field of overlapping luminous bokeh orbs.
+ * EnergyFieldBokeh — subtle ambient glow beneath the body of light.
  *
- * Inspired by Shadertoy "bokeh-gradient" — multiple soft circles drifting
- * at different speeds, overlapping to create a continuous prismatic field.
- * Each orb has its own color (primary/secondary/accent), soft edges, and
- * bloom simulation. The result is a warm, living, iridescent presence.
- *
- * Rendered on a sphere mesh (viewed from inside), full-screen fragment shader.
- * Orbs move in response to time, hands warp their positions, and
- * movement intensity affects bloom and speed.
+ * Clipped to the lower hemisphere. Toned-down blue-white bokeh orbs
+ * that drift slowly downward, representing scattered light refractions
+ * in the air below the cascading figure. Not the main event — just
+ * atmospheric support for the Viola body above.
  */
 
 const VERTEX = /* glsl */ `
@@ -42,166 +38,92 @@ const FRAGMENT = /* glsl */ `
   varying vec3 vWorldPos;
   varying vec2 vUv;
 
-  // Colors — iridescent palette
-  const vec3 primaryColor = vec3(0.2, 0.2, 0.9);   // deep blue
-  const vec3 secondaryColor = vec3(0.8, 0.4, 0.9);  // violet
-  const vec3 accentColor = vec3(0.4, 0.9, 0.6);     // cyan-green
-  const vec3 warmColor = vec3(1.0, 0.6, 0.2);       // warm amber
-  const vec3 hotColor = vec3(1.0, 0.3, 0.4);        // hot rose
+  // Muted blue-white palette
+  const vec3 deepBlue  = vec3(0.15, 0.2, 0.55);
+  const vec3 paleBlue  = vec3(0.4, 0.5, 0.8);
+  const vec3 softWhite = vec3(0.6, 0.65, 0.8);
 
-  const float softness = 0.2;
+  const float softness = 0.25;
 
-  // Compute a single flowing orb
   float circle(vec2 uv, vec2 pos, float radius) {
-    float dist = distance(uv, pos);
-    return 1.0 - smoothstep(radius - softness, radius + softness, dist);
+    return 1.0 - smoothstep(radius - softness, radius + softness, distance(uv, pos));
   }
 
   void main() {
-    // Map fragment to local UV based on view direction
-    vec3 viewDir = normalize(vWorldPos - cameraPosition);
     vec3 localDir = normalize(vWorldPos - uHeadPos);
 
-    // Spherical UV mapping from the user's perspective
-    float phi = atan(localDir.z, localDir.x); // -PI to PI
-    float theta = acos(clamp(localDir.y, -1.0, 1.0)); // 0 to PI
+    // Spherical UV mapping
+    float phi   = atan(localDir.z, localDir.x);
+    float theta = acos(clamp(localDir.y, -1.0, 1.0));
     vec2 uv = vec2(phi / 6.2831 + 0.5, theta / 3.14159);
 
-    float time = uTime * 0.6;
+    // ── Lower hemisphere clip ──────────────────────────────────
+    // theta < PI/2 means upper hemisphere → fade out
+    // theta = 0 is straight up, PI is straight down
+    // We want visible only in the lower half (theta > ~PI/3)
+    float hemiMask = smoothstep(0.3, 0.55, uv.y); // uv.y = theta/PI
 
-    // Hand speed influence
+    if (hemiMask < 0.01) discard;
+
+    float time = uTime * 0.4; // slower than before
+    float effectStrength = 0.5 + uBreath * 0.2;
+    float baseSize = 0.25 * (1.0 + uBreath * 0.1);
+
+    // Hand energy — subtle
     float handEnergy = 0.0;
-    vec2 handWarpL = vec2(0.0);
-    vec2 handWarpR = vec2(0.0);
-
     if (uLeftHandActive > 0.5) {
-      vec3 handLocalL = normalize(uLeftHandPos - uHeadPos);
-      vec2 handUvL = vec2(
-        atan(handLocalL.z, handLocalL.x) / 6.2831 + 0.5,
-        acos(clamp(handLocalL.y, -1.0, 1.0)) / 3.14159
-      );
-      float dL = distance(uv, handUvL);
-      float infL = smoothstep(0.4, 0.0, dL);
-      handWarpL = normalize(uv - handUvL + vec2(0.001)) * infL * uLeftHandSpeed * 0.15;
-      handEnergy += infL * uLeftHandSpeed;
+      vec3 hL = normalize(uLeftHandPos - uHeadPos);
+      vec2 hUvL = vec2(atan(hL.z, hL.x) / 6.2831 + 0.5, acos(clamp(hL.y, -1.0, 1.0)) / 3.14159);
+      handEnergy += smoothstep(0.4, 0.0, distance(uv, hUvL)) * uLeftHandSpeed * 0.5;
     }
-
     if (uRightHandActive > 0.5) {
-      vec3 handLocalR = normalize(uRightHandPos - uHeadPos);
-      vec2 handUvR = vec2(
-        atan(handLocalR.z, handLocalR.x) / 6.2831 + 0.5,
-        acos(clamp(handLocalR.y, -1.0, 1.0)) / 3.14159
-      );
-      float dR = distance(uv, handUvR);
-      float infR = smoothstep(0.4, 0.0, dR);
-      handWarpR = normalize(uv - handUvR + vec2(0.001)) * infR * uRightHandSpeed * 0.15;
-      handEnergy += infR * uRightHandSpeed;
+      vec3 hR = normalize(uRightHandPos - uHeadPos);
+      vec2 hUvR = vec2(atan(hR.z, hR.x) / 6.2831 + 0.5, acos(clamp(hR.y, -1.0, 1.0)) / 3.14159);
+      handEnergy += smoothstep(0.4, 0.0, distance(uv, hUvR)) * uRightHandSpeed * 0.5;
     }
+    handEnergy = min(handEnergy, 0.8);
 
-    handEnergy = min(handEnergy, 1.5);
-    vec2 warpedUv = uv + handWarpL + handWarpR;
-
-    // Breath modulation
-    float moveSpeed = 0.6 + uMovementIntensity * 0.4;
-    float t = time * moveSpeed;
-
-    // Effect strength — controls overall visibility
-    float effectStrength = 0.7 + uBreath * 0.3;
-    float sizeVariation = 0.5;
-
-    // --- 8 flowing orbs at different positions and speeds ---
-    float baseSize = 0.3 * (1.0 + uBreath * 0.15);
-
+    // ── 5 soft drifting orbs (downward drift bias) ─────────────
     // Orb 1
-    vec2 pos1 = vec2(0.3, 0.4) + vec2(sin(t) * 0.08, cos(t * 1.3) * 0.06) * effectStrength;
-    float r1 = baseSize * (1.2 + sin(t * 2.1) * sizeVariation) * effectStrength;
-    float c1 = circle(warpedUv, pos1, r1);
+    vec2 p1 = vec2(0.3, 0.6) + vec2(sin(time * 0.7) * 0.06, cos(time * 0.5) * 0.04 + time * 0.02);
+    p1.y = fract(p1.y); // wrap around
+    float c1 = circle(uv, p1, baseSize * 1.1 * effectStrength);
 
     // Orb 2
-    vec2 pos2 = vec2(0.7, 0.6) + vec2(cos(t + 1.0) * 0.07, sin(t * 1.5) * 0.09) * effectStrength;
-    float r2 = baseSize * (0.9 + cos(t * 1.8 + 1.5) * sizeVariation) * effectStrength;
-    float c2 = circle(warpedUv, pos2, r2);
+    vec2 p2 = vec2(0.7, 0.7) + vec2(cos(time * 0.6 + 1.0) * 0.05, sin(time * 0.4) * 0.05 + time * 0.015);
+    p2.y = fract(p2.y);
+    float c2 = circle(uv, p2, baseSize * 0.9 * effectStrength);
 
     // Orb 3
-    vec2 pos3 = vec2(0.5, 0.3) + vec2(sin(t * 1.3 + 3.0) * 0.06, cos(t + 4.0) * 0.08) * effectStrength;
-    float r3 = baseSize * (1.1 + sin(t * 2.5 + 2.0) * sizeVariation) * effectStrength;
-    float c3 = circle(warpedUv, pos3, r3);
+    vec2 p3 = vec2(0.5, 0.65) + vec2(sin(time * 0.8 + 2.5) * 0.04, cos(time * 0.3 + 1.0) * 0.06 + time * 0.018);
+    p3.y = fract(p3.y);
+    float c3 = circle(uv, p3, baseSize * 1.2 * effectStrength);
 
     // Orb 4
-    vec2 pos4 = vec2(0.2, 0.7) + vec2(cos(t * 0.9 + 5.0) * 0.09, sin(t * 1.0) * 0.05) * effectStrength;
-    float r4 = baseSize * (1.0 + cos(t * 1.9 + 3.5) * sizeVariation) * effectStrength;
-    float c4 = circle(warpedUv, pos4, r4);
+    vec2 p4 = vec2(0.2, 0.75) + vec2(cos(time * 0.5 + 4.0) * 0.07, sin(time * 0.6) * 0.03 + time * 0.012);
+    p4.y = fract(p4.y);
+    float c4 = circle(uv, p4, baseSize * 0.8 * effectStrength);
 
     // Orb 5
-    vec2 pos5 = vec2(0.8, 0.2) + vec2(sin(t * 1.4 + 2.5) * 0.07, cos(t * 0.7 + 3.5) * 0.06) * effectStrength;
-    float r5 = baseSize * (0.8 + sin(t * 2.2 + 4.0) * sizeVariation) * effectStrength;
-    float c5 = circle(warpedUv, pos5, r5);
+    vec2 p5 = vec2(0.8, 0.55) + vec2(sin(time * 0.9 + 3.0) * 0.05, cos(time * 0.4 + 2.0) * 0.04 + time * 0.016);
+    p5.y = fract(p5.y);
+    float c5 = circle(uv, p5, baseSize * 1.0 * effectStrength);
 
-    // Orb 6
-    vec2 pos6 = vec2(0.6, 0.8) + vec2(cos(t * 1.6 + 4.5) * 0.08, sin(t * 0.6 + 2.5) * 0.07) * effectStrength;
-    float r6 = baseSize * (1.3 + cos(t * 1.7 + 5.0) * sizeVariation) * effectStrength;
-    float c6 = circle(warpedUv, pos6, r6);
+    // Color — muted blue-white
+    float opacity = 0.25 + handEnergy * 0.15;
+    vec3 overlay = deepBlue  * c1 * opacity
+                 + paleBlue  * c2 * opacity * 0.8
+                 + softWhite * c3 * opacity * 0.6
+                 + deepBlue  * c4 * opacity * 0.7
+                 + paleBlue  * c5 * opacity * 0.5;
 
-    // Orb 7
-    vec2 pos7 = vec2(0.4, 0.6) + vec2(sin(t * 0.8 + 6.0) * 0.05, cos(t * 1.5 + 1.0) * 0.09) * effectStrength;
-    float r7 = baseSize * (1.1 + sin(t * 2.8 + 1.0) * sizeVariation) * effectStrength;
-    float c7 = circle(warpedUv, pos7, r7);
-
-    // Orb 8
-    vec2 pos8 = vec2(0.1, 0.5) + vec2(cos(t * 1.2 + 3.5) * 0.06, sin(t * 0.9 + 4.5) * 0.08) * effectStrength;
-    float r8 = baseSize * (0.9 + cos(t * 2.0 + 2.5) * sizeVariation) * effectStrength;
-    float c8 = circle(warpedUv, pos8, r8);
-
-    // Color each orb — cycling through the palette
-    float circleOpacity = 0.4 + handEnergy * 0.2;
-    vec3 overlay1 = primaryColor * c1 * circleOpacity;
-    vec3 overlay2 = secondaryColor * c2 * circleOpacity * 0.9;
-    vec3 overlay3 = accentColor * c3 * circleOpacity * 0.8;
-    vec3 overlay4 = primaryColor * c4 * circleOpacity * 0.7;
-    vec3 overlay5 = secondaryColor * c5 * circleOpacity * 0.8;
-    vec3 overlay6 = accentColor * c6 * circleOpacity * 0.6;
-    vec3 overlay7 = primaryColor * c7 * circleOpacity * 0.7;
-    vec3 overlay8 = secondaryColor * c8 * circleOpacity * 0.5;
-
-    vec3 totalOverlay = overlay1 + overlay2 + overlay3 + overlay4
-                      + overlay5 + overlay6 + overlay7 + overlay8;
-
-    // Bloom simulation — bright orbs bleed light
-    float bloomIntensity = 2.1 + handEnergy * 1.5;
-    vec3 bloomColor = vec3(0.0);
-    float bloom1 = c1 * 0.5;
-    bloomColor += primaryColor * bloom1 * (1.0 - smoothstep(0.0, r1 * 1.5, distance(warpedUv, pos1)));
-    float bloom3 = c3 * 0.4;
-    bloomColor += accentColor * bloom3 * (1.0 - smoothstep(0.0, r3 * 1.5, distance(warpedUv, pos3)));
-    float bloom5 = c5 * 0.3;
-    bloomColor += secondaryColor * bloom5 * (1.0 - smoothstep(0.0, r5 * 1.5, distance(warpedUv, pos5)));
-    bloomColor *= bloomIntensity * 0.3;
-
-    // Hand warmth — add warm color near active hands
-    vec3 handColor = mix(warmColor, hotColor, min(handEnergy, 1.0));
-    totalOverlay += handColor * handEnergy * 0.25;
-
-    // Combine
-    float totalAlpha = (c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8) * 0.15;
-    totalAlpha = clamp(totalAlpha, 0.0, 1.0);
-
-    vec3 finalColor = totalOverlay + bloomColor;
-
-    // Saturation boost
-    float luminance = dot(finalColor, vec3(0.299, 0.587, 0.114));
-    finalColor = mix(vec3(luminance), finalColor, 1.2);
-
-    // Vignette — fade at edges of the sphere
-    float vignette = 1.0 - pow(distance(uv, vec2(0.5)), 0.9) * 1.2;
-    vignette = clamp(vignette, 0.3, 1.0);
-    totalAlpha *= vignette;
-
-    // Overall alpha from breath
-    totalAlpha *= effectStrength * 0.6;
+    float totalAlpha = (c1 + c2 + c3 + c4 + c5) * 0.08;
+    totalAlpha *= hemiMask;
+    totalAlpha *= effectStrength * 0.4;
 
     if (totalAlpha < 0.005) discard;
 
-    gl_FragColor = vec4(finalColor, totalAlpha);
+    gl_FragColor = vec4(overlay, totalAlpha);
   }
 `;
 
@@ -223,8 +145,7 @@ export class EnergyFieldBokeh {
   constructor() {
     this.group = new THREE.Group();
 
-    // Sphere viewed from inside — the flowing bokeh is projected onto its surface
-    this.geometry = new THREE.SphereGeometry(1.0, 32, 24);
+    this.geometry = new THREE.SphereGeometry(1.2, 32, 24);
 
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERTEX,
