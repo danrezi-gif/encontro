@@ -111,23 +111,16 @@ const FRAGMENT = /* glsl */ `
     float totalAlpha = 0.0;
 
     float cascadeSpeed = 1.8;
-    float z = 0.15;
+    float z = 0.1; // start slightly in front of camera
 
     // Prayer glow intensity
     float prayer = uHandProximity;
     float prayerGlow = prayer * prayer; // quadratic ramp for dramatic effect
 
-    for (float i = 0.0; i < 32.0; i++) {
+    for (float i = 0.0; i < 50.0; i++) {
       vec3 p = cameraPosition + rd * z;
 
       float bd = bodyField(p);
-
-      // Skip expensive noise when far from body (optimization)
-      if (bd > 0.6) {
-        z += bd * 0.5;
-        if (z > marchLen) break;
-        continue;
-      }
 
       float relY = p.y - uHeadPos.y;
 
@@ -197,11 +190,11 @@ const FRAGMENT = /* glsl */ `
         lightCol = mix(lightCol, warmPrayer, prayerGlow);
       }
 
-      col += lightCol * density * 0.07;
-      totalAlpha += density * 0.06;
+      col += lightCol * density * 0.06;
+      totalAlpha += density * 0.05;
 
-      // Adaptive step — larger when far from surface
-      float step = bd < 0.25 ? 0.035 : max(bd * 0.45, 0.04);
+      // Adaptive step — finer near the body surface
+      float step = bd < 0.25 ? 0.025 : max(bd * 0.4, 0.03);
       z += step;
       if (z > marchLen) break;
     }

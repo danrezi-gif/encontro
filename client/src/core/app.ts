@@ -62,9 +62,9 @@ export class App {
     this.energyField = new EnergyField();
     this.scene.add(this.energyField.group);
 
-    // Subtle ambient glow beneath
+    // Subtle ambient glow beneath (disabled — too strong, revisit later)
     this.energyFieldBokeh = new EnergyFieldBokeh();
-    this.scene.add(this.energyFieldBokeh.group);
+    // this.scene.add(this.energyFieldBokeh.group);
 
     // Environment
     this.worldRoot = new THREE.Group();
