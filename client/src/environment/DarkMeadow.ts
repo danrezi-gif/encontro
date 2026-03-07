@@ -25,6 +25,7 @@ const FRAGMENT = /* glsl */ `
   uniform float uTime;
   uniform vec3 uUserPos;     // head position in world space
   uniform vec3 uGestureDir;  // hand gesture direction (from head to avg hand)
+  uniform float uSoulHeight; // soul altitude above ground (0 = standing)
 
   varying vec3 vWorldPos;
 
@@ -116,31 +117,50 @@ const FRAGMENT = /* glsl */ `
     veinPattern = pow(max(veinPattern, 0.0), 4.0);
     veinPattern *= smoothstep(3.5, 0.5, scaledDist) * 0.2;
 
+    // ── Distance-dependent light behaviour ─────────────────────
+    // Close (0-5m): full water reflection as before
+    // Mid (5-20m): transition — water reflection fades, ambient glow rises
+    // Far (20m+): ground pool gone, soul lights surroundings instead
+    float waterReflection = smoothstep(20.0, 0.0, uSoulHeight);
+    // At altitude, spread a very wide subtle glow beneath (lantern effect)
+    float lanternRadius = 10.0 + uSoulHeight * 1.5;
+    float lanternGlow = exp(-scaledUserDist * scaledUserDist / (lanternRadius * lanternRadius)) 
+                      * smoothstep(5.0, 20.0, uSoulHeight) * 0.25;
+
     // ── Brightness ─────────────────────────────────────────────
+    // Height dims the focused pool but not the wide lantern glow
     float heightDim = 1.0 / (1.0 + heightAbove * 0.12);
 
     // ── Distance fade — hide plane edges, infinite horizon illusion ──
-    float edgeFade = smoothstep(90.0, 40.0, length(gp));
+    float edgeFade = smoothstep(900.0, 400.0, length(gp));
 
-    float intensity = (poolShape * 0.4 + innerGlow * 0.6 + baseGlow + ripple + veinPattern)
-                    * heightDim * gestureDim * edgeFade;
+    float poolIntensity = (poolShape * 0.4 + innerGlow * 0.6 + baseGlow + ripple + veinPattern)
+                        * heightDim * gestureDim * waterReflection;
+    float totalIntensity = (poolIntensity + lanternGlow) * edgeFade;
 
     // Color
     vec3 poolDeep   = vec3(0.08, 0.12, 0.35);
     vec3 poolBright = vec3(0.3, 0.4, 0.75);
     vec3 poolCore   = vec3(0.5, 0.6, 0.9);
+    vec3 lanternCol = vec3(0.15, 0.2, 0.5); // softer, wider tint at altitude
 
     vec3 poolColor = mix(poolDeep, poolBright, innerGlow);
     poolColor = mix(poolColor, poolCore, innerGlow * innerGlow);
 
-    // Dark ambient ground
+    vec3 litColor = mix(poolColor * poolIntensity, lanternCol * lanternGlow, 
+                        smoothstep(5.0, 25.0, uSoulHeight));
+
+    // Dark ambient ground — subtle noise-based variation
     vec3 groundDark = vec3(0.015, 0.015, 0.035);
     float groundNoise = noise2d(gp * 0.3) * 0.01;
 
-    vec3 finalColor = groundDark + groundNoise + poolColor * intensity;
+    // Distant ground gets a very faint glow to hint at infinite water
+    float horizonGlow = smoothstep(400.0, 150.0, length(gp)) * 0.008;
+
+    vec3 finalColor = groundDark + groundNoise + litColor + vec3(0.04, 0.06, 0.12) * horizonGlow;
 
     // Fade alpha at distance so plane dissolves into void
-    float alphaFade = smoothstep(95.0, 50.0, length(gp));
+    float alphaFade = smoothstep(950.0, 500.0, length(gp));
     gl_FragColor = vec4(finalColor, 0.95 * alphaFade);
   }
 `;
@@ -154,7 +174,7 @@ export class DarkMeadow {
   constructor() {
     this.group = new THREE.Group();
 
-    const geometry = new THREE.PlaneGeometry(200, 200, 1, 1);
+    const geometry = new THREE.PlaneGeometry(2000, 2000, 1, 1);
 
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERTEX,
@@ -163,6 +183,7 @@ export class DarkMeadow {
         uTime: { value: 0 },
         uUserPos: { value: new THREE.Vector3(0, 1.6, 0) },
         uGestureDir: { value: new THREE.Vector3() },
+        uSoulHeight: { value: 0 },
       },
       transparent: true,
       depthWrite: false,
@@ -175,16 +196,24 @@ export class DarkMeadow {
     this.group.add(plane);
   }
 
+  private soulHeight = 0;
+
   /** Pass user head position and hand gesture direction (world space). */
   setTracking(headPos: THREE.Vector3, gestureDir: THREE.Vector3): void {
     this.userPos.copy(headPos);
     this.gestureDir.copy(gestureDir);
   }
 
+  /** Set the soul's current altitude for distance-dependent lighting. */
+  setHeight(h: number): void {
+    this.soulHeight = h;
+  }
+
   update(_delta: number, elapsed: number): void {
     this.material.uniforms.uTime.value = elapsed;
     this.material.uniforms.uUserPos.value.copy(this.userPos);
     this.material.uniforms.uGestureDir.value.copy(this.gestureDir);
+    this.material.uniforms.uSoulHeight.value = this.soulHeight;
   }
 
   dispose(): void {
