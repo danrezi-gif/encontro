@@ -201,9 +201,6 @@ const FRAGMENT = /* glsl */ `
     // Tone map
     col = tanh(col * 1.2);
 
-    // Edge fade — soften at the far reaches of the march
-    totalAlpha *= smoothstep(marchLen, marchLen * 0.3, z);
-
     // Breathing modulation
     totalAlpha *= 0.8 + uBreath * 0.2;
 

@@ -1,16 +1,16 @@
 import * as THREE from "three";
 
 /**
- * Levitation system — the user's body of light slowly rises from the ground
- * and drifts forward when stillness is detected.
+ * Levitation — spontaneous ascent toward the sky.
  *
- * Works by translating a world-root group downward/backward, so the user
- * (whose position is locked to XR tracking) appears to float upward.
+ * After a brief grounding period, the user begins to rise continuously.
+ * The rise accelerates gently, creating the feeling of being lifted
+ * by the body of light. Hand gestures modulate direction and speed:
+ *   - Hands raised → rise faster
+ *   - Hands extended forward → drift forward faster
+ *   - Lateral hand offset → steer sideways
  *
- * Phases:
- *   grounding  → user just entered, standing on the meadow, settling in
- *   lifting    → stillness detected, slow rise begins (ease-in)
- *   floating   → hovering, gentle drift, hand gestures subtly influence movement
+ * There is no ceiling. The user ascends into the sky.
  */
 export class Levitation {
   /** World offset — applied to the environment root group each frame.
@@ -22,212 +22,122 @@ export class Levitation {
     return -this.offset.y;
   }
 
-  /** Normalized lift progress 0..1 */
-  get progress(): number {
-    return this.liftProgress;
-  }
+  // ── State ──────────────────────────────────────────────────
+  private groundingTimer = 0;
+  private riseSpeed = 0;
+  private isRising = false;
 
-  // ── Phase state ──────────────────────────────────────────────
-  private phase: "grounding" | "lifting" | "floating" = "grounding";
-  private stillnessTimer = 0;
-  private liftProgress = 0; // 0→1 over the full rise
-
-  // ── Drift accumulator (world-space XZ) ───────────────────────
+  // ── Drift accumulator (world-space XZ) ──────────────────────
   private driftVelocity = new THREE.Vector3(0, 0, 0);
 
-  // (bob removed — sacred stillness, not playful bounce)
-
-  // ── Temp vectors (reused to avoid GC) ────────────────────────
+  // ── Temp vectors ───────────────────────────────────────────
   private _avgHand = new THREE.Vector3();
   private _handDelta = new THREE.Vector3();
 
-  // ── Tuning constants ─────────────────────────────────────────
-  /** Total body activity (m/s) below which we count as "still" */
-  private readonly STILLNESS_THRESHOLD = 0.3;
-  /** Seconds of stillness before lift begins */
-  private readonly STILLNESS_REQUIRED = 3.0;
-  /** Maximum height the user can reach (metres) */
-  private readonly MAX_HEIGHT = 4.0;
-  /** Base lift rate (metres/sec at full ease) */
-  private readonly LIFT_RATE = 0.12;
-  /** Forward drift speed at full height (metres/sec) */
-  private readonly DRIFT_FORWARD = 0.35;
-  /** How much hand vertical gesture influences height (metres/sec per metre offset) */
-  private readonly HAND_VERTICAL_GAIN = 0.15;
-  /** How much hand lateral spread influences drift direction (metres/sec per metre offset) */
-  private readonly HAND_LATERAL_GAIN = 0.06;
-  /** How much hand forward gesture influences drift direction */
-  private readonly HAND_FORWARD_GAIN = 0.15;
+  // ── Tuning ─────────────────────────────────────────────────
+  /** Seconds before levitation begins */
+  private readonly GROUNDING_DURATION = 1.5;
+  /** Rise acceleration (m/s²) */
+  private readonly RISE_ACCEL = 0.035;
+  /** Maximum rise speed (m/s) */
+  private readonly RISE_MAX_SPEED = 0.6;
+  /** Base forward drift speed (m/s), scales with height */
+  private readonly DRIFT_FORWARD = 0.25;
+  /** How much hands-up accelerates rise */
+  private readonly HAND_UP_GAIN = 0.15;
+  /** How much hands-forward amplifies drift */
+  private readonly HAND_FORWARD_GAIN = 0.2;
+  /** How much lateral hand offset steers */
+  private readonly HAND_LATERAL_GAIN = 0.1;
 
   // ─────────────────────────────────────────────────────────────
   update(
     delta: number,
-    elapsed: number,
+    _elapsed: number,
     headPos: THREE.Vector3,
-    headVelocity: THREE.Vector3,
+    _headVelocity: THREE.Vector3,
     leftHandPos: THREE.Vector3,
     rightHandPos: THREE.Vector3,
     leftActive: boolean,
     rightActive: boolean,
-    leftHandSpeed: number,
-    rightHandSpeed: number,
+    _leftHandSpeed: number,
+    _rightHandSpeed: number,
     headForward: THREE.Vector3,
   ): void {
-    // ── Measure overall activity ───────────────────────────────
-    const headSpeed = headVelocity.length();
-    const handActivity =
-      (leftActive ? leftHandSpeed : 0) + (rightActive ? rightHandSpeed : 0);
-    const totalActivity = headSpeed + handActivity * 0.5;
-
-    switch (this.phase) {
-      // ── GROUNDING ─────────────────────────────────────────────
-      case "grounding":
-        if (totalActivity < this.STILLNESS_THRESHOLD) {
-          this.stillnessTimer += delta;
-          if (this.stillnessTimer >= this.STILLNESS_REQUIRED) {
-            this.phase = "lifting";
-          }
-        } else {
-          // Reset timer quickly if the user moves
-          this.stillnessTimer = Math.max(
-            0,
-            this.stillnessTimer - delta * 2,
-          );
-        }
-        break;
-
-      // ── LIFTING ───────────────────────────────────────────────
-      case "lifting": {
-        this.liftProgress = Math.min(
-          1,
-          this.liftProgress + delta * this.LIFT_RATE,
-        );
-        const eased = easeInOutCubic(this.liftProgress);
-
-        // Rise
-        this.offset.y = -eased * this.MAX_HEIGHT;
-
-        // Begin gentle forward drift (ramps in with height)
-        const forwardDrift = this.DRIFT_FORWARD * eased * delta;
-        this.offset.x -= headForward.x * forwardDrift;
-        this.offset.z -= headForward.z * forwardDrift;
-
-        // Transition to floating once noticeably airborne
-        if (this.liftProgress >= 0.25) {
-          this.phase = "floating";
-        }
-        break;
+    // ── Grounding pause ────────────────────────────────────────
+    if (!this.isRising) {
+      this.groundingTimer += delta;
+      if (this.groundingTimer >= this.GROUNDING_DURATION) {
+        this.isRising = true;
       }
-
-      // ── FLOATING ──────────────────────────────────────────────
-      case "floating": {
-        // Continue slow rise toward max
-        this.liftProgress = Math.min(
-          1,
-          this.liftProgress + delta * this.LIFT_RATE * 0.25,
-        );
-        const eased = easeInOutCubic(this.liftProgress);
-
-        // ── Hand-based height influence ────────────────────────
-        let handHeightDelta = 0;
-        let handLateralDelta = 0;
-        let handsActive = 0;
-
-        if (leftActive || rightActive) {
-          // Average hand position
-          this._avgHand.set(0, 0, 0);
-          if (leftActive) {
-            this._avgHand.add(leftHandPos);
-            handsActive++;
-          }
-          if (rightActive) {
-            this._avgHand.add(rightHandPos);
-            handsActive++;
-          }
-          if (handsActive > 0) {
-            this._avgHand.divideScalar(handsActive);
-          }
-
-          // Hand height relative to head → vertical influence
-          // Hands above head = rise, below chest = descend slightly
-          const handRelativeY = this._avgHand.y - headPos.y;
-          // Positive when hands above head, negative when below
-          // Neutral zone: -0.3 to 0.0 (normal resting position)
-          const neutralY = -0.15;
-          handHeightDelta =
-            (handRelativeY - neutralY) * this.HAND_VERTICAL_GAIN;
-
-          // Lateral hand offset relative to facing → drift direction
-          // Project average hand position onto the right vector
-          const right = new THREE.Vector3()
-            .crossVectors(headForward, new THREE.Vector3(0, 1, 0))
-            .normalize();
-          this._handDelta.copy(this._avgHand).sub(headPos);
-          handLateralDelta =
-            this._handDelta.dot(right) * this.HAND_LATERAL_GAIN;
-        }
-
-        // Base height from progress curve
-        let targetY = -eased * this.MAX_HEIGHT;
-
-        // Modulate with hand influence (clamped)
-        targetY -= handHeightDelta * delta * 60; // scale to frame-rate independent
-        targetY = Math.max(-this.MAX_HEIGHT, Math.min(0, targetY));
-
-        // Smooth toward target
-        this.offset.y += (targetY - this.offset.y) * Math.min(1, delta * 2);
-
-        // ── Forward drift ──────────────────────────────────────
-        const driftMag = this.DRIFT_FORWARD * eased;
-
-        // Base forward from head facing
-        this.driftVelocity.set(
-          -headForward.x * driftMag,
-          0,
-          -headForward.z * driftMag,
-        );
-
-        // Hand-direction influence: hands reaching forward amplifies drift
-        if (handsActive > 0) {
-          this._handDelta.copy(this._avgHand).sub(headPos);
-          const handForwardAmount = this._handDelta.dot(headForward);
-          // Hands extended forward → boost forward drift
-          const forwardBoost = Math.max(0, handForwardAmount) * this.HAND_FORWARD_GAIN;
-          this.driftVelocity.x -= headForward.x * forwardBoost;
-          this.driftVelocity.z -= headForward.z * forwardBoost;
-
-          // Lateral hand influence
-          const right2 = new THREE.Vector3()
-            .crossVectors(headForward, new THREE.Vector3(0, 1, 0))
-            .normalize();
-          this.driftVelocity.addScaledVector(right2, -handLateralDelta);
-        }
-
-        this.offset.x += this.driftVelocity.x * delta;
-        this.offset.z += this.driftVelocity.z * delta;
-
-        break;
-      }
+      return;
     }
+
+    // ── Compute hand influence ─────────────────────────────────
+    let handUpInfluence = 0;
+    let handForwardInfluence = 0;
+    let handLateralInfluence = 0;
+
+    if (leftActive || rightActive) {
+      this._avgHand.set(0, 0, 0);
+      let count = 0;
+      if (leftActive) { this._avgHand.add(leftHandPos); count++; }
+      if (rightActive) { this._avgHand.add(rightHandPos); count++; }
+      if (count > 0) this._avgHand.divideScalar(count);
+
+      // Hand position relative to head
+      this._handDelta.subVectors(this._avgHand, headPos);
+
+      // Hands above head → rise faster (neutral at -0.15 = resting position)
+      const relY = this._handDelta.y + 0.15;
+      handUpInfluence = Math.max(0, relY) * this.HAND_UP_GAIN;
+
+      // Hands extended forward → drift faster
+      handForwardInfluence = Math.max(0, this._handDelta.dot(headForward)) * this.HAND_FORWARD_GAIN;
+
+      // Lateral offset → steer
+      const right = new THREE.Vector3()
+        .crossVectors(headForward, new THREE.Vector3(0, 1, 0))
+        .normalize();
+      handLateralInfluence = this._handDelta.dot(right) * this.HAND_LATERAL_GAIN;
+    }
+
+    // ── Rise ───────────────────────────────────────────────────
+    // Gentle acceleration, boosted by hands-up gesture
+    this.riseSpeed += (this.RISE_ACCEL + handUpInfluence) * delta;
+    this.riseSpeed = Math.min(this.riseSpeed, this.RISE_MAX_SPEED);
+
+    this.offset.y -= this.riseSpeed * delta;
+
+    // ── Forward drift (increases with height) ──────────────────
+    const height = this.height;
+    const heightFactor = Math.min(1, height * 0.15); // ramps over ~7m
+    const driftMag = this.DRIFT_FORWARD * heightFactor + handForwardInfluence;
+
+    this.driftVelocity.set(
+      -headForward.x * driftMag,
+      0,
+      -headForward.z * driftMag,
+    );
+
+    // Lateral steering
+    if (Math.abs(handLateralInfluence) > 0.001) {
+      const right = new THREE.Vector3()
+        .crossVectors(headForward, new THREE.Vector3(0, 1, 0))
+        .normalize();
+      this.driftVelocity.addScaledVector(right, -handLateralInfluence);
+    }
+
+    this.offset.x += this.driftVelocity.x * delta;
+    this.offset.z += this.driftVelocity.z * delta;
   }
 
-  /** Reset to grounding phase (e.g. when re-entering VR). */
+  /** Reset to grounding (e.g. when re-entering VR). */
   reset(): void {
-    this.phase = "grounding";
-    this.stillnessTimer = 0;
-    this.liftProgress = 0;
+    this.groundingTimer = 0;
+    this.riseSpeed = 0;
+    this.isRising = false;
     this.offset.set(0, 0, 0);
     this.driftVelocity.set(0, 0, 0);
   }
-
-  /** Current phase name (useful for debugging / UI). */
-  get currentPhase(): string {
-    return this.phase;
-  }
-}
-
-// ── Utils ────────────────────────────────────────────────────────
-
-function easeInOutCubic(t: number): number {
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
