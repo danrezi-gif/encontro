@@ -8,6 +8,7 @@ import { EnergyFieldBokeh } from "../presence/EnergyFieldBokeh";
 import { LightTrail } from "../presence/LightTrail";
 import { CosmicSky } from "../environment/CosmicSky";
 import { DarkMeadow } from "../environment/DarkMeadow";
+import { Levitation } from "../presence/Levitation";
 
 /**
  * Main application — bootstraps the Three.js scene, WebXR session,
@@ -32,6 +33,8 @@ export class App {
   private lightTrail: LightTrail;
   private cosmicSky: CosmicSky;
   private darkMeadow: DarkMeadow;
+  private levitation: Levitation;
+  private worldRoot: THREE.Group; // environment objects — moved by levitation
   private isRunning = false;
   private vrButton: HTMLElement | null = null;
 
@@ -39,6 +42,10 @@ export class App {
   private leftHandSpeedSmooth = 0;
   private rightHandSpeedSmooth = 0;
   private movementIntensitySmooth = 0;
+
+  // Desktop camera velocity tracking (for levitation stillness detection)
+  private prevCameraPos = new THREE.Vector3(0, 1.6, 0);
+  private desktopHeadVelocity = new THREE.Vector3();
 
   constructor(private canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -64,12 +71,22 @@ export class App {
     this.lightTrail = new LightTrail(2000);
     this.scene.add(this.lightTrail.group);
 
-    // Environment
+    // Environment — parented to worldRoot so levitation can move them
+    this.worldRoot = new THREE.Group();
+    this.scene.add(this.worldRoot);
+
     this.cosmicSky = new CosmicSky(2500);
-    this.scene.add(this.cosmicSky.group);
+    this.worldRoot.add(this.cosmicSky.group);
 
     this.darkMeadow = new DarkMeadow();
-    this.scene.add(this.darkMeadow.group);
+    this.worldRoot.add(this.darkMeadow.group);
+
+    // Levitation — rises the user by translating the world downward
+    this.levitation = new Levitation();
+
+    // Reset levitation when entering/exiting VR
+    this.xr.onSessionStart(() => this.levitation.reset());
+    this.xr.onSessionEnd(() => this.levitation.reset());
 
     this.handleResize = this.handleResize.bind(this);
     window.addEventListener("resize", this.handleResize);
@@ -172,6 +189,44 @@ export class App {
       this.leftHandSpeedSmooth, this.rightHandSpeedSmooth,
     );
     this.lightTrail.update(delta, elapsed);
+
+    // ── Levitation ─────────────────────────────────────────────
+    // Compute head forward direction (horizontal only)
+    const headForward = new THREE.Vector3();
+    if (this.xr.isPresenting) {
+      // In XR, use the camera's forward from the XR camera
+      const xrCam = this.renderer.xr.getCamera();
+      xrCam.getWorldDirection(headForward);
+    } else {
+      this.camera.getWorldDirection(headForward);
+    }
+    headForward.y = 0;
+    headForward.normalize();
+
+    // Compute head velocity for levitation (desktop: derive from camera movement)
+    let headVelocity: THREE.Vector3;
+    if (this.xr.isPresenting) {
+      headVelocity = this.xr.head.velocity;
+    } else {
+      this.desktopHeadVelocity
+        .subVectors(this.camera.position, this.prevCameraPos)
+        .divideScalar(Math.max(delta, 0.001));
+      this.prevCameraPos.copy(this.camera.position);
+      headVelocity = this.desktopHeadVelocity;
+    }
+
+    this.levitation.update(
+      delta, elapsed,
+      headPos,
+      headVelocity,
+      leftHandPos, rightHandPos,
+      leftActive, rightActive,
+      this.leftHandSpeedSmooth, this.rightHandSpeedSmooth,
+      headForward,
+    );
+
+    // Apply levitation offset to the world root (world moves down = user rises)
+    this.worldRoot.position.copy(this.levitation.offset);
 
     // Update subsystems
     this.input.update(delta, elapsed);
