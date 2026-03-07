@@ -7,6 +7,8 @@ import { EnergyField } from "../presence/EnergyField";
 import { EnergyFieldBokeh } from "../presence/EnergyFieldBokeh";
 import { CosmicSky } from "../environment/CosmicSky";
 import { DarkMeadow } from "../environment/DarkMeadow";
+import { EtherealMist } from "../environment/EtherealMist";
+import { DustStreams } from "../environment/DustStreams";
 import { Levitation } from "../presence/Levitation";
 
 /**
@@ -31,6 +33,8 @@ export class App {
   private energyFieldBokeh: EnergyFieldBokeh;
   private cosmicSky: CosmicSky;
   private darkMeadow: DarkMeadow;
+  private etherealMist: EtherealMist;
+  private dustStreams: DustStreams;
   private levitation: Levitation;
   private worldRoot: THREE.Group;
   private isRunning = false;
@@ -75,6 +79,12 @@ export class App {
 
     this.darkMeadow = new DarkMeadow();
     this.worldRoot.add(this.darkMeadow.group);
+
+    this.etherealMist = new EtherealMist();
+    this.worldRoot.add(this.etherealMist.group);
+
+    this.dustStreams = new DustStreams();
+    this.worldRoot.add(this.dustStreams.group);
 
     // Levitation
     this.levitation = new Levitation();
@@ -241,9 +251,29 @@ export class App {
 
     // ── Subsystems ──────────────────────────────────────────────
     this.input.update(delta, elapsed);
+
+    const soulHeight = this.levitation.height;
+
+    this.cosmicSky.setHeight(soulHeight);
     this.cosmicSky.update(delta, elapsed);
+
     this.darkMeadow.setTracking(headPos, this.gestureDir);
+    this.darkMeadow.setHeight(soulHeight);
     this.darkMeadow.update(delta, elapsed);
+
+    // Soul position in world-root space for mist/dust parting
+    const soulWorldPos = new THREE.Vector3(
+      headPos.x + this.levitation.offset.x,
+      headPos.y + this.levitation.offset.y,
+      headPos.z + this.levitation.offset.z,
+    );
+
+    this.etherealMist.setSoulPos(soulWorldPos);
+    this.etherealMist.update(delta, elapsed);
+
+    this.dustStreams.setSoulWorldPos(soulWorldPos);
+    this.dustStreams.setSoulPos(headPos);
+    this.dustStreams.update(delta, elapsed);
 
     this.renderer.render(this.scene, this.camera);
   }
@@ -334,6 +364,8 @@ export class App {
     this.energyFieldBokeh.dispose();
     this.cosmicSky.dispose();
     this.darkMeadow.dispose();
+    this.etherealMist.dispose();
+    this.dustStreams.dispose();
     this.renderer.dispose();
     this.vrButton?.remove();
   }
