@@ -7,19 +7,16 @@ import * as THREE from "three";
  * streams downward like luminous water. Built from capsule SDFs (torso + arms)
  * with downward-scrolling FBM noise creating the cascade effect.
  *
- * Head/upper torso glows brightest. Light dims and breaks into streaming
- * trails below the hips, dissolving before reaching the ground.
- * Blue-white palette with warm white at peak density.
+ * Prayer gesture: when hands come together, the body glows intensely
+ * with warm multicolored light — a sacred intensification.
+ *
+ * Optimized for Quest 3: 32 march steps, noise skipped far from body.
  */
 
 const VERTEX = /* glsl */ `
   varying vec3 vWorldPos;
-  varying vec3 vLocalPos;
-  varying vec3 vNormal;
 
   void main() {
-    vLocalPos = position;
-    vNormal = normalize(normalMatrix * normal);
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
     gl_Position = projectionMatrix * viewMatrix * worldPos;
@@ -39,10 +36,9 @@ const FRAGMENT = /* glsl */ `
   uniform float uLeftHandSpeed;
   uniform float uRightHandSpeed;
   uniform float uMovementIntensity;
+  uniform float uHandProximity; // 0 = far apart, 1 = touching (prayer)
 
   varying vec3 vWorldPos;
-  varying vec3 vLocalPos;
-  varying vec3 vNormal;
 
   // ── Noise ────────────────────────────────────────────────────
   float hash(float n) { return fract(sin(n) * 43758.5453123); }
@@ -84,18 +80,15 @@ const FRAGMENT = /* glsl */ `
 
   // ── Body SDF ─────────────────────────────────────────────────
   float bodyField(vec3 p) {
-    // Torso: crown of head to hips
     vec3 headTop = uHeadPos + vec3(0.0, 0.12, 0.0);
     vec3 hips    = uHeadPos + vec3(0.0, -0.6, 0.0);
     float torso  = sdCapsule(p, headTop, hips, 0.16);
 
-    // Head: slightly wider at crown
     float head = length(p - uHeadPos - vec3(0.0, 0.05, 0.0)) - 0.13;
     torso = smin(torso, head, 0.08);
 
     float body = torso;
 
-    // Arms — only when tracked
     if (uLeftHandActive > 0.5) {
       vec3 shoulder = uHeadPos + vec3(-0.2, -0.18, 0.0);
       body = smin(body, sdCapsule(p, shoulder, uLeftHandPos, 0.05), 0.1);
@@ -111,7 +104,6 @@ const FRAGMENT = /* glsl */ `
   void main() {
     float T = uTime;
 
-    // March FROM camera TOWARD the far sphere surface — body is between them
     vec3 rd = normalize(vWorldPos - cameraPosition);
     float marchLen = length(vWorldPos - cameraPosition);
 
@@ -119,26 +111,33 @@ const FRAGMENT = /* glsl */ `
     float totalAlpha = 0.0;
 
     float cascadeSpeed = 1.8;
-    float z = 0.1; // start slightly in front of camera
+    float z = 0.15;
 
-    for (float i = 0.0; i < 50.0; i++) {
+    // Prayer glow intensity
+    float prayer = uHandProximity;
+    float prayerGlow = prayer * prayer; // quadratic ramp for dramatic effect
+
+    for (float i = 0.0; i < 32.0; i++) {
       vec3 p = cameraPosition + rd * z;
 
-      // Body distance
       float bd = bodyField(p);
 
-      // Height relative to head
+      // Skip expensive noise when far from body (optimization)
+      if (bd > 0.6) {
+        z += bd * 0.5;
+        if (z > marchLen) break;
+        continue;
+      }
+
       float relY = p.y - uHeadPos.y;
 
-      // ── Cascading noise (scrolls downward) ─────────────────
+      // ── Cascading noise ──────────────────────────────────────
       vec3 cp = p * 3.5;
       cp.y -= T * cascadeSpeed;
       float cascade = fbm(cp);
 
-      // Fine detail (cheaper single noise lookup)
       float fine = noise(p * 8.0 + vec3(0.0, -T * cascadeSpeed * 1.4, 0.0));
 
-      // Create vein-like streaming patterns
       float veins = 1.0 - abs(cascade - 0.5) * 2.0;
       veins = pow(max(veins, 0.0), 2.5);
 
@@ -147,17 +146,15 @@ const FRAGMENT = /* glsl */ `
 
       float stream = veins * 0.7 + fineVeins * 0.3;
 
-      // ── Density ────────────────────────────────────────────
+      // ── Density ──────────────────────────────────────────────
       float density = 0.0;
 
-      // Inside body: bright cascading light
       float bodyMask = smoothstep(0.12, -0.06, bd);
       density += bodyMask * (0.3 + stream * 0.7);
 
-      // Surface glow: luminous edge
       density += smoothstep(0.08, 0.0, abs(bd)) * 0.4;
 
-      // Streaming below body — light pours from the hips
+      // Streaming below body
       float belowHips = smoothstep(uHeadPos.y - 0.4, uHeadPos.y - 0.7, p.y);
       float colRadius = 0.2 + belowHips * 0.5;
       float colDist   = length(p.xz - uHeadPos.xz);
@@ -165,7 +162,7 @@ const FRAGMENT = /* glsl */ `
       float streamFade = smoothstep(uHeadPos.y - 2.5, uHeadPos.y - 0.6, p.y);
       density += streamCol * stream * belowHips * streamFade * 0.45;
 
-      // Hand disturbance — movement scatters light
+      // Hand disturbance
       if (uLeftHandActive > 0.5) {
         float dL = distance(p, uLeftHandPos);
         density += smoothstep(0.4, 0.0, dL) * uLeftHandSpeed * stream * 0.3;
@@ -175,12 +172,15 @@ const FRAGMENT = /* glsl */ `
         density += smoothstep(0.4, 0.0, dR) * uRightHandSpeed * stream * 0.3;
       }
 
-      // ── Height brightness (Viola: head brightest) ──────────
+      // ── Prayer boost — hands together intensifies entire body ──
+      density *= 1.0 + prayerGlow * 1.5;
+
+      // ── Height brightness ────────────────────────────────────
       float heightBright = smoothstep(-2.0, 0.3, relY);
       heightBright = 0.3 + heightBright * 0.7;
       density *= heightBright;
 
-      // ── Color: blue-white, warming at peak density ─────────
+      // ── Color ────────────────────────────────────────────────
       vec3 coolBlue  = vec3(0.35, 0.45, 0.9);
       vec3 paleBlue  = vec3(0.6, 0.72, 1.0);
       vec3 warmWhite = vec3(1.0, 0.95, 0.88);
@@ -188,22 +188,27 @@ const FRAGMENT = /* glsl */ `
       vec3 lightCol = mix(coolBlue, paleBlue, heightBright);
       lightCol = mix(lightCol, warmWhite, density * heightBright);
 
-      // Accumulate
-      col += lightCol * density * 0.06;
-      totalAlpha += density * 0.05;
+      // Prayer: shift to warm multicolored (subtle iridescence)
+      if (prayerGlow > 0.01) {
+        // Iridescent color shift based on position + time
+        vec3 prayerColor = 0.5 + 0.5 * cos(T * 0.5 + relY * 4.0 + vec3(0.0, 2.1, 4.2));
+        // Blend from warm white toward prismatic
+        vec3 warmPrayer = mix(vec3(1.0, 0.9, 0.7), prayerColor, 0.4);
+        lightCol = mix(lightCol, warmPrayer, prayerGlow);
+      }
 
-      // Adaptive step — finer near the body surface
-      float step = bd < 0.25 ? 0.025 : max(bd * 0.4, 0.03);
+      col += lightCol * density * 0.07;
+      totalAlpha += density * 0.06;
+
+      // Adaptive step — larger when far from surface
+      float step = bd < 0.25 ? 0.035 : max(bd * 0.45, 0.04);
       z += step;
       if (z > marchLen) break;
     }
 
-    // Tone map
     col = tanh(col * 1.2);
 
-    // Breathing modulation
     totalAlpha *= 0.8 + uBreath * 0.2;
-
     totalAlpha = clamp(totalAlpha, 0.0, 0.9);
     if (totalAlpha < 0.005) discard;
 
@@ -217,7 +222,6 @@ export class EnergyField {
   private geometry: THREE.IcosahedronGeometry;
   private material: THREE.ShaderMaterial;
 
-  // External inputs
   private headPos = new THREE.Vector3(0, 1.6, 0);
   private leftHandPos = new THREE.Vector3();
   private rightHandPos = new THREE.Vector3();
@@ -226,11 +230,11 @@ export class EnergyField {
   private leftHandSpeed = 0;
   private rightHandSpeed = 0;
   private movementIntensity = 0;
+  private handProximity = 0;
 
   constructor() {
     this.group = new THREE.Group();
 
-    // Large enough to contain the full body + streaming trails below
     this.geometry = new THREE.IcosahedronGeometry(2.5, 4);
 
     this.material = new THREE.ShaderMaterial({
@@ -247,6 +251,7 @@ export class EnergyField {
         uLeftHandSpeed: { value: 0 },
         uRightHandSpeed: { value: 0 },
         uMovementIntensity: { value: 0 },
+        uHandProximity: { value: 0 },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -279,8 +284,12 @@ export class EnergyField {
     this.movementIntensity = movementIntensity;
   }
 
+  /** Set prayer proximity (0 = far, 1 = touching). */
+  setHandProximity(proximity: number): void {
+    this.handProximity = proximity;
+  }
+
   update(_delta: number, elapsed: number): void {
-    // Center the volume on the body (slightly below head)
     this.mesh.position.copy(this.headPos);
     this.mesh.position.y -= 0.3;
 
@@ -288,6 +297,7 @@ export class EnergyField {
     u.uTime.value = elapsed;
     u.uBreath.value = Math.sin(elapsed * 0.8) * 0.5 + 0.5;
     u.uMovementIntensity.value = this.movementIntensity;
+    u.uHandProximity.value = this.handProximity;
     u.uHeadPos.value.copy(this.headPos);
     u.uLeftHandPos.value.copy(this.leftHandPos);
     u.uRightHandPos.value.copy(this.rightHandPos);

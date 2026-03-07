@@ -203,7 +203,16 @@ export class App {
       this.movementIntensitySmooth,
     ];
 
+    // Prayer gesture: hands approaching each other
+    let handProximity = 0;
+    if (leftActive && rightActive) {
+      const handDist = leftHandPos.distanceTo(rightHandPos);
+      handProximity = 1.0 - Math.min(handDist / 0.4, 1.0); // 0.4m = max distance, 0 = touching
+      handProximity = Math.max(0, handProximity);
+    }
+
     this.energyField.setTracking(...trackingArgs);
+    this.energyField.setHandProximity(handProximity);
     this.energyField.update(delta, elapsed);
 
     this.energyFieldBokeh.setTracking(...trackingArgs);

@@ -52,6 +52,10 @@ export class XRSessionManager {
    * Request an immersive-vr session.
    * Features requested: local-floor for standing, hand-tracking for native hand input.
    * We deliberately do NOT add controller models or hand models to the scene.
+   *
+   * NOTE: Quest 3 palm-flip quick actions menu is an OS-level gesture that
+   * cannot be suppressed from WebXR. Users may see system UI when their
+   * palm faces them at certain angles. This is a platform limitation.
    */
   async enterVR(): Promise<void> {
     if (!navigator.xr) {

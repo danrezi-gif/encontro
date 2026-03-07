@@ -1,11 +1,12 @@
 import * as THREE from "three";
 
 /**
- * EnergyFieldBokeh — ambient light that transitions with ascent.
+ * EnergyFieldBokeh — transcendent sky glow during ascent.
  *
- * At ground level: subtle glow beneath the body (scattered light on water).
- * As the user ascends: the glow expands and rises, filling the sky around
- * and above the user — ascending into light itself.
+ * At ground level: subtle glow beneath the body.
+ * As the user ascends: the sky fills with luminous orbs of light,
+ * growing in size, brightness, and number — the user is ascending
+ * into a celestial field of light. Spectacular, not subtle.
  */
 
 const VERTEX = /* glsl */ `
@@ -23,7 +24,7 @@ const FRAGMENT = /* glsl */ `
 
   uniform float uTime;
   uniform float uBreath;
-  uniform float uHeight;  // levitation height (0 = ground, grows as user rises)
+  uniform float uHeight;
   uniform vec3 uHeadPos;
   uniform vec3 uLeftHandPos;
   uniform vec3 uRightHandPos;
@@ -35,114 +36,107 @@ const FRAGMENT = /* glsl */ `
 
   varying vec3 vWorldPos;
 
-  const float softness = 0.25;
-
-  float circle(vec2 uv, vec2 pos, float radius) {
-    return 1.0 - smoothstep(radius - softness, radius + softness, distance(uv, pos));
+  float circle(vec2 uv, vec2 pos, float radius, float soft) {
+    return 1.0 - smoothstep(radius - soft, radius + soft, distance(uv, pos));
   }
 
   void main() {
     vec3 localDir = normalize(vWorldPos - uHeadPos);
 
-    // Spherical UV mapping
     float phi   = atan(localDir.z, localDir.x);
     float theta = acos(clamp(localDir.y, -1.0, 1.0));
     vec2 uv = vec2(phi / 6.2831 + 0.5, theta / 3.14159);
-    // uv.y: 0 = straight up, 1 = straight down
 
-    // ── Height-driven hemisphere transition ────────────────────
-    // At ground (height=0): only lower hemisphere visible (uv.y > 0.35)
-    // As user ascends: visible region expands upward
-    // At height ~10+: full sphere, brighter above (ascending into light)
-    float heightFactor = clamp(uHeight / 10.0, 0.0, 1.0);
+    // Height factor: 0 at ground, 1 at ~8m
+    float hf = clamp(uHeight / 8.0, 0.0, 1.0);
+    // Extended factor for continued growth beyond 8m
+    float hfExt = clamp(uHeight / 15.0, 0.0, 1.0);
 
-    // Cutoff point moves from 0.35 (lower-only) to -0.1 (everything)
-    float cutoff = mix(0.35, -0.1, heightFactor);
-    float hemiMask = smoothstep(cutoff, cutoff + 0.2, uv.y);
-
-    // At height, also add an upper-hemisphere glow
-    float upperGlow = smoothstep(0.5, 0.0, uv.y) * heightFactor;
-    hemiMask = max(hemiMask, upperGlow);
+    // ── Hemisphere transition ────────────────────────────────
+    // Ground: lower hemisphere only. Ascent: expands to full sky.
+    float cutoff = mix(0.35, -0.3, hf);
+    float hemiMask = smoothstep(cutoff, cutoff + 0.15, uv.y);
+    // Upper sky glow ramps in strongly
+    float skyGlow = smoothstep(0.6, 0.0, uv.y) * hf * 1.5;
+    hemiMask = max(hemiMask, skyGlow);
 
     if (hemiMask < 0.01) discard;
 
-    float time = uTime * 0.4;
-    float effectStrength = 0.5 + uBreath * 0.2;
-    float baseSize = 0.25 * (1.0 + uBreath * 0.1);
+    float time = uTime * 0.35;
+    float breath = 0.5 + uBreath * 0.2;
+    // Orbs grow much larger during ascent
+    float baseSize = mix(0.2, 0.45, hf) * (1.0 + uBreath * 0.1);
+    float soft = mix(0.2, 0.35, hf); // softer at height
 
-    // Intensity increases with height (ascending into light)
-    float heightIntensity = 1.0 + heightFactor * 2.5;
+    // Drift direction: downward at ground, upward during ascent
+    float drift = mix(0.02, -0.03, hf);
 
     // Hand energy
     float handEnergy = 0.0;
     if (uLeftHandActive > 0.5) {
       vec3 hL = normalize(uLeftHandPos - uHeadPos);
       vec2 hUvL = vec2(atan(hL.z, hL.x) / 6.2831 + 0.5, acos(clamp(hL.y, -1.0, 1.0)) / 3.14159);
-      handEnergy += smoothstep(0.4, 0.0, distance(uv, hUvL)) * uLeftHandSpeed * 0.5;
+      handEnergy += smoothstep(0.5, 0.0, distance(uv, hUvL)) * uLeftHandSpeed * 0.6;
     }
     if (uRightHandActive > 0.5) {
       vec3 hR = normalize(uRightHandPos - uHeadPos);
       vec2 hUvR = vec2(atan(hR.z, hR.x) / 6.2831 + 0.5, acos(clamp(hR.y, -1.0, 1.0)) / 3.14159);
-      handEnergy += smoothstep(0.4, 0.0, distance(uv, hUvR)) * uRightHandSpeed * 0.5;
+      handEnergy += smoothstep(0.5, 0.0, distance(uv, hUvR)) * uRightHandSpeed * 0.6;
     }
-    handEnergy = min(handEnergy, 0.8);
+    handEnergy = min(handEnergy, 1.0);
 
-    // ── Drifting orbs ────────────────────────────────────────
-    // At ground: drift downward. At height: drift upward (ascending).
-    float driftDir = mix(1.0, -1.0, heightFactor); // +1 = down in uv, -1 = up in uv
+    // ── Base orbs (always present) ─────────────────────────────
+    float c1 = circle(uv, fract(vec2(0.3, 0.6)  + vec2(sin(time*0.7)*0.08,  time*drift + cos(time*0.5)*0.05)),  baseSize * 1.0 * breath, soft);
+    float c2 = circle(uv, fract(vec2(0.7, 0.65) + vec2(cos(time*0.6+1.0)*0.07, time*drift*0.8 + sin(time*0.4)*0.04)), baseSize * 0.85 * breath, soft);
+    float c3 = circle(uv, fract(vec2(0.5, 0.5)  + vec2(sin(time*0.8+2.5)*0.06, time*drift*1.1 + cos(time*0.35)*0.06)), baseSize * 1.2 * breath, soft);
+    float c4 = circle(uv, fract(vec2(0.15, 0.7) + vec2(cos(time*0.5+4.0)*0.09, time*drift*0.7 + sin(time*0.55)*0.04)), baseSize * 0.9 * breath, soft);
+    float c5 = circle(uv, fract(vec2(0.85, 0.45)+ vec2(sin(time*0.9+3.0)*0.06, time*drift*0.9 + cos(time*0.45)*0.05)), baseSize * 1.05 * breath, soft);
 
-    vec2 p1 = vec2(0.3, 0.6) + vec2(sin(time * 0.7) * 0.08, cos(time * 0.5) * 0.06 + time * 0.02 * driftDir);
-    p1 = fract(p1);
-    float c1 = circle(uv, p1, baseSize * 1.1 * effectStrength);
+    // ── Sky orbs (appear during ascent) ────────────────────────
+    float c6 = circle(uv, fract(vec2(0.4, 0.2)  + vec2(cos(time*0.4+5.0)*0.1,  time*drift*1.2 + sin(time*0.3)*0.07)),   baseSize * 1.4 * breath, soft) * hf;
+    float c7 = circle(uv, fract(vec2(0.65, 0.15)+ vec2(sin(time*0.5+2.0)*0.08, time*drift*1.0 + cos(time*0.28)*0.08)),  baseSize * 1.3 * breath, soft) * hf;
+    float c8 = circle(uv, fract(vec2(0.2, 0.25) + vec2(cos(time*0.35+1.5)*0.09, time*drift*1.3 + sin(time*0.22)*0.06)), baseSize * 1.6 * breath, soft) * hf;
+    float c9 = circle(uv, fract(vec2(0.8, 0.1)  + vec2(sin(time*0.45+6.0)*0.07, time*drift*0.8 + cos(time*0.4)*0.09)),  baseSize * 1.1 * breath, soft) * hfExt;
+    float c10= circle(uv, fract(vec2(0.5, 0.08) + vec2(cos(time*0.3+3.5)*0.11, time*drift*1.4 + sin(time*0.2)*0.07)),   baseSize * 1.8 * breath, soft) * hfExt;
 
-    vec2 p2 = vec2(0.7, 0.7) + vec2(cos(time * 0.6 + 1.0) * 0.07, sin(time * 0.4) * 0.05 + time * 0.015 * driftDir);
-    p2 = fract(p2);
-    float c2 = circle(uv, p2, baseSize * 0.9 * effectStrength);
+    // ── Ambient sky wash at high altitude ──────────────────────
+    // A soft overall glow that fills the upper sky
+    float ambientSky = smoothstep(0.6, 0.0, uv.y) * hfExt * 0.15;
 
-    vec2 p3 = vec2(0.5, 0.4) + vec2(sin(time * 0.8 + 2.5) * 0.06, cos(time * 0.3 + 1.0) * 0.07 + time * 0.018 * driftDir);
-    p3 = fract(p3);
-    float c3 = circle(uv, p3, baseSize * 1.3 * effectStrength);
+    // ── Color palette — warmer and more luminous at height ─────
+    vec3 deepBlue   = vec3(0.12, 0.18, 0.5);
+    vec3 paleBlue   = vec3(0.35, 0.45, 0.8);
+    vec3 warmWhite  = vec3(0.8, 0.78, 0.9);
+    vec3 celestial  = vec3(0.9, 0.85, 0.95);
+    vec3 goldenGlow = vec3(0.95, 0.88, 0.7);
 
-    vec2 p4 = vec2(0.2, 0.75) + vec2(cos(time * 0.5 + 4.0) * 0.09, sin(time * 0.6) * 0.04 + time * 0.012 * driftDir);
-    p4 = fract(p4);
-    float c4 = circle(uv, p4, baseSize * 0.85 * effectStrength);
+    vec3 col1 = mix(deepBlue, warmWhite, hf * 0.6);
+    vec3 col2 = mix(paleBlue, celestial, hf * 0.5);
+    vec3 col3 = mix(warmWhite, goldenGlow, hf * 0.3);
 
-    vec2 p5 = vec2(0.8, 0.3) + vec2(sin(time * 0.9 + 3.0) * 0.06, cos(time * 0.4 + 2.0) * 0.05 + time * 0.016 * driftDir);
-    p5 = fract(p5);
-    float c5 = circle(uv, p5, baseSize * 1.0 * effectStrength);
+    float opacity = mix(0.3, 0.7, hf) + handEnergy * 0.2;
 
-    // At height, add extra upper orbs
-    vec2 p6 = vec2(0.4, 0.2) + vec2(cos(time * 0.45 + 5.0) * 0.08, sin(time * 0.35) * 0.06 + time * 0.01 * driftDir);
-    p6 = fract(p6);
-    float c6 = circle(uv, p6, baseSize * 1.4 * effectStrength) * heightFactor;
-
-    vec2 p7 = vec2(0.6, 0.15) + vec2(sin(time * 0.55 + 2.0) * 0.07, cos(time * 0.25 + 3.0) * 0.08 + time * 0.014 * driftDir);
-    p7 = fract(p7);
-    float c7 = circle(uv, p7, baseSize * 1.2 * effectStrength) * heightFactor;
-
-    // Color — warmer and brighter as user ascends
-    vec3 deepBlue  = vec3(0.15, 0.2, 0.55);
-    vec3 paleBlue  = vec3(0.4, 0.5, 0.8);
-    vec3 softWhite = vec3(0.6, 0.65, 0.8);
-    vec3 warmGlow  = vec3(0.7, 0.7, 0.85);
-
-    // At height, shift palette warmer
-    vec3 col1 = mix(deepBlue, warmGlow, heightFactor * 0.5);
-    vec3 col2 = mix(paleBlue, softWhite, heightFactor * 0.3);
-    vec3 col3 = mix(softWhite, warmGlow, heightFactor * 0.4);
-
-    float opacity = 0.25 + handEnergy * 0.15;
     vec3 overlay = col1 * c1 * opacity
-                 + col2 * c2 * opacity * 0.8
-                 + col3 * c3 * opacity * 0.7
-                 + col1 * c4 * opacity * 0.7
-                 + col2 * c5 * opacity * 0.6
-                 + col3 * c6 * opacity * 0.9
-                 + warmGlow * c7 * opacity * 0.8;
+                 + col2 * c2 * opacity * 0.9
+                 + col3 * c3 * opacity * 0.8
+                 + col1 * c4 * opacity * 0.85
+                 + col2 * c5 * opacity * 0.75
+                 + col3 * c6 * opacity * 1.0
+                 + celestial * c7 * opacity * 0.95
+                 + warmWhite * c8 * opacity * 1.1
+                 + goldenGlow * c9 * opacity * 0.9
+                 + celestial * c10 * opacity * 1.2;
 
-    float totalAlpha = (c1 + c2 + c3 + c4 + c5 + c6 + c7) * 0.08;
+    // Ambient sky wash color
+    overlay += mix(deepBlue, celestial, hfExt) * ambientSky;
+
+    float totalAlpha = (c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10) * 0.1;
+    totalAlpha += ambientSky;
     totalAlpha *= hemiMask;
-    totalAlpha *= effectStrength * 0.4 * heightIntensity;
+
+    // Intensity ramps dramatically with height
+    float intensityMult = mix(0.5, 4.0, hf);
+    totalAlpha *= breath * intensityMult;
 
     if (totalAlpha < 0.005) discard;
 
@@ -169,8 +163,8 @@ export class EnergyFieldBokeh {
   constructor() {
     this.group = new THREE.Group();
 
-    // Larger sphere for atmospheric effect
-    this.geometry = new THREE.SphereGeometry(3.0, 32, 24);
+    // Large sphere — encompasses the user's sky view
+    this.geometry = new THREE.SphereGeometry(5.0, 32, 24);
 
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERTEX,
@@ -219,14 +213,12 @@ export class EnergyFieldBokeh {
     this.movementIntensity = movementIntensity;
   }
 
-  /** Set the current levitation height for sky glow transition. */
   setHeight(h: number): void {
     this.liftHeight = h;
   }
 
   update(_delta: number, elapsed: number): void {
     this.mesh.position.copy(this.headPos);
-    this.mesh.position.y -= 0.2;
 
     const u = this.material.uniforms;
     u.uTime.value = elapsed;

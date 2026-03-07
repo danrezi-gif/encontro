@@ -37,18 +37,18 @@ export class Levitation {
   // ── Tuning ─────────────────────────────────────────────────
   /** Seconds before levitation begins */
   private readonly GROUNDING_DURATION = 1.5;
-  /** Rise acceleration (m/s²) */
-  private readonly RISE_ACCEL = 0.035;
+  /** Rise acceleration (m/s²) — slow base, hands provide the main lift */
+  private readonly RISE_ACCEL = 0.02;
   /** Maximum rise speed (m/s) */
-  private readonly RISE_MAX_SPEED = 0.6;
+  private readonly RISE_MAX_SPEED = 0.8;
   /** Base forward drift speed (m/s), scales with height */
-  private readonly DRIFT_FORWARD = 0.25;
-  /** How much hands-up accelerates rise */
-  private readonly HAND_UP_GAIN = 0.15;
-  /** How much hands-forward amplifies drift */
-  private readonly HAND_FORWARD_GAIN = 0.2;
+  private readonly DRIFT_FORWARD = 0.12;
+  /** How much hands-up accelerates rise — PRIMARY vertical control */
+  private readonly HAND_UP_GAIN = 0.5;
+  /** How much hands-forward amplifies drift — PRIMARY horizontal control */
+  private readonly HAND_FORWARD_GAIN = 0.5;
   /** How much lateral hand offset steers */
-  private readonly HAND_LATERAL_GAIN = 0.1;
+  private readonly HAND_LATERAL_GAIN = 0.25;
 
   // ─────────────────────────────────────────────────────────────
   update(
