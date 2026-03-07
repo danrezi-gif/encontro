@@ -3,10 +3,10 @@ import * as THREE from "three";
 /**
  * DarkMeadow — bioluminescent ground plane.
  *
- * A near-black ground that glows with soft luminous pools directly
- * beneath the user's body of light. The cascading light "lands" on
- * the ground and collects into organic, slowly pulsing pools.
- * Ripples emanate outward. Fades to deep darkness at distance.
+ * A near-black ground that glows with soft luminous pools beneath
+ * the user's body of light. The pool shifts in the direction the
+ * user's hands gesture — forward, sideways, wherever the aura leads.
+ * When hands point upward the pool dims (light directed away from ground).
  */
 
 const VERTEX = /* glsl */ `
@@ -23,7 +23,8 @@ const FRAGMENT = /* glsl */ `
   precision highp float;
 
   uniform float uTime;
-  uniform vec3 uUserPos; // head position in world space
+  uniform vec3 uUserPos;     // head position in world space
+  uniform vec3 uGestureDir;  // hand gesture direction (from head to avg hand)
 
   varying vec3 vWorldPos;
 
@@ -53,59 +54,88 @@ const FRAGMENT = /* glsl */ `
   }
 
   void main() {
-    vec2 gp = vWorldPos.xz; // ground position
-    vec2 up = uUserPos.xz;  // user XZ projection
+    vec2 gp = vWorldPos.xz;
+    vec2 up = uUserPos.xz;
+    float heightAbove = uUserPos.y - vWorldPos.y;
 
-    float dist = distance(gp, up);
-    float heightAbove = uUserPos.y - vWorldPos.y; // how high user is above ground
+    // ── Gesture-driven pool shift ──────────────────────────────
+    // XZ component shifts the pool center toward where hands point
+    vec2 gestureXZ = uGestureDir.xz;
+    float gestureLen = length(gestureXZ);
 
-    // Scale pool radius with height (higher = wider, dimmer pools)
+    // Pool center shifts up to ~2m in gesture direction
+    vec2 poolCenter = up + gestureXZ * 3.0;
+
+    // Gesture Y: hands pointing up → dim pool (light goes up, not down)
+    // hands pointing down → brighten pool
+    float gestureDim = 1.0 - clamp(uGestureDir.y * 1.5, -0.3, 0.7);
+
+    // Distance from pool center
+    float dist = distance(gp, poolCenter);
+
+    // Also compute distance from user (for base proximity glow)
+    float userDist = distance(gp, up);
+
+    // Scale pool with height
     float poolScale = 1.0 + heightAbove * 0.3;
     float scaledDist = dist / poolScale;
+    float scaledUserDist = userDist / poolScale;
 
     // ── Main bioluminescent pool ───────────────────────────────
-    // Organic noise-modulated shape
     float n = fbm2(gp * 0.8 + vec2(uTime * 0.05, uTime * 0.03));
     float poolShape = smoothstep(2.5 + n * 0.8, 0.2, scaledDist);
 
-    // Inner bright core
+    // Inner core
     float innerGlow = smoothstep(1.2 + n * 0.4, 0.0, scaledDist);
     innerGlow = pow(innerGlow, 1.5);
 
-    // ── Ripples emanating outward ──────────────────────────────
-    float ripple = sin(dist * 6.0 - uTime * 1.2 + n * 3.0) * 0.5 + 0.5;
-    ripple *= smoothstep(4.0, 0.5, scaledDist); // only near the pool
-    ripple *= 0.3;
+    // Ambient base glow under user (always present, doesn't shift as much)
+    float baseGlow = smoothstep(3.0, 0.5, scaledUserDist) * 0.3;
 
-    // ── Organic vein patterns on the ground ────────────────────
+    // Stretch pool along gesture direction
+    if (gestureLen > 0.01) {
+      vec2 gestureNorm = gestureXZ / gestureLen;
+      vec2 toFrag = gp - up;
+      float along = dot(toFrag, gestureNorm);
+      float perp = length(toFrag - gestureNorm * along);
+
+      // Elongate: compressed perpendicular, stretched along
+      float stretchFactor = 1.0 + gestureLen * 2.0;
+      float elongatedDist = length(vec2(perp, along / stretchFactor)) / poolScale;
+      float elongatedPool = smoothstep(2.0 + n * 0.5, 0.1, elongatedDist);
+      poolShape = max(poolShape, elongatedPool * 0.7);
+    }
+
+    // ── Ripples ────────────────────────────────────────────────
+    float ripple = sin(dist * 6.0 - uTime * 1.2 + n * 3.0) * 0.5 + 0.5;
+    ripple *= smoothstep(4.0, 0.5, scaledDist) * 0.3;
+
+    // ── Organic vein patterns ──────────────────────────────────
     float veins = fbm2(gp * 2.5 + vec2(uTime * 0.02));
     float veinPattern = 1.0 - abs(veins - 0.5) * 2.0;
     veinPattern = pow(max(veinPattern, 0.0), 4.0);
     veinPattern *= smoothstep(3.5, 0.5, scaledDist) * 0.2;
 
-    // ── Brightness (dimmer when user is higher) ────────────────
+    // ── Brightness ─────────────────────────────────────────────
     float heightDim = 1.0 / (1.0 + heightAbove * 0.15);
 
-    // ── Combine ────────────────────────────────────────────────
-    float intensity = (poolShape * 0.4 + innerGlow * 0.6 + ripple + veinPattern) * heightDim;
+    float intensity = (poolShape * 0.4 + innerGlow * 0.6 + baseGlow + ripple + veinPattern)
+                    * heightDim * gestureDim;
 
-    // Color: blue-white matching the cascading body light
-    vec3 poolDeep = vec3(0.08, 0.12, 0.35);
+    // Color
+    vec3 poolDeep   = vec3(0.08, 0.12, 0.35);
     vec3 poolBright = vec3(0.3, 0.4, 0.75);
-    vec3 poolCore = vec3(0.5, 0.6, 0.9);
+    vec3 poolCore   = vec3(0.5, 0.6, 0.9);
 
     vec3 poolColor = mix(poolDeep, poolBright, innerGlow);
     poolColor = mix(poolColor, poolCore, innerGlow * innerGlow);
 
     // Dark ambient ground
     vec3 groundDark = vec3(0.015, 0.015, 0.035);
-
-    // Subtle distant noise texture so the ground isn't perfectly flat black
     float groundNoise = noise2d(gp * 0.3) * 0.01;
 
     vec3 finalColor = groundDark + groundNoise + poolColor * intensity;
 
-    // Alpha: mostly opaque ground, with pool glow on top
     gl_FragColor = vec4(finalColor, 0.95);
   }
 `;
@@ -114,6 +144,7 @@ export class DarkMeadow {
   readonly group: THREE.Group;
   private material: THREE.ShaderMaterial;
   private userPos = new THREE.Vector3(0, 1.6, 0);
+  private gestureDir = new THREE.Vector3();
 
   constructor() {
     this.group = new THREE.Group();
@@ -126,6 +157,7 @@ export class DarkMeadow {
       uniforms: {
         uTime: { value: 0 },
         uUserPos: { value: new THREE.Vector3(0, 1.6, 0) },
+        uGestureDir: { value: new THREE.Vector3() },
       },
     });
 
@@ -135,14 +167,16 @@ export class DarkMeadow {
     this.group.add(plane);
   }
 
-  /** Pass the user's head position (world space) for pool projection. */
-  setTracking(headPos: THREE.Vector3): void {
+  /** Pass user head position and hand gesture direction (world space). */
+  setTracking(headPos: THREE.Vector3, gestureDir: THREE.Vector3): void {
     this.userPos.copy(headPos);
+    this.gestureDir.copy(gestureDir);
   }
 
   update(_delta: number, elapsed: number): void {
     this.material.uniforms.uTime.value = elapsed;
     this.material.uniforms.uUserPos.value.copy(this.userPos);
+    this.material.uniforms.uGestureDir.value.copy(this.gestureDir);
   }
 
   dispose(): void {

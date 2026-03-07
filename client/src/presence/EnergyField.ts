@@ -111,21 +111,18 @@ const FRAGMENT = /* glsl */ `
   void main() {
     float T = uTime;
 
+    // March FROM camera TOWARD the far sphere surface — body is between them
     vec3 rd = normalize(vWorldPos - cameraPosition);
-    vec3 center = uHeadPos - vec3(0.0, 0.3, 0.0);
-    float zMax = 2.5;
-
-    vec3 entryPoint = vWorldPos;
-    if (length(entryPoint - center) > zMax * 1.5) discard;
+    float marchLen = length(vWorldPos - cameraPosition);
 
     vec3 col  = vec3(0.0);
     float totalAlpha = 0.0;
 
     float cascadeSpeed = 1.8;
-    float z = 0.05;
+    float z = 0.1; // start slightly in front of camera
 
     for (float i = 0.0; i < 50.0; i++) {
-      vec3 p = entryPoint + rd * z;
+      vec3 p = cameraPosition + rd * z;
 
       // Body distance
       float bd = bodyField(p);
@@ -198,14 +195,14 @@ const FRAGMENT = /* glsl */ `
       // Adaptive step — finer near the body surface
       float step = bd < 0.25 ? 0.025 : max(bd * 0.4, 0.03);
       z += step;
-      if (z > zMax) break;
+      if (z > marchLen) break;
     }
 
     // Tone map
     col = tanh(col * 1.2);
 
-    // Edge fade
-    totalAlpha *= smoothstep(zMax, zMax * 0.3, length(entryPoint - center));
+    // Edge fade — soften at the far reaches of the march
+    totalAlpha *= smoothstep(marchLen, marchLen * 0.3, z);
 
     // Breathing modulation
     totalAlpha *= 0.8 + uBreath * 0.2;
