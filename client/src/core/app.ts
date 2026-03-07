@@ -5,6 +5,7 @@ import { InputManager } from "./input";
 import { XRSessionManager } from "../xr/XRSessionManager";
 import { EnergyField } from "../presence/EnergyField";
 import { EnergyFieldBokeh } from "../presence/EnergyFieldBokeh";
+import { BreathStream } from "../presence/BreathStream";
 import { CosmicSky } from "../environment/CosmicSky";
 import { DarkMeadow } from "../environment/DarkMeadow";
 import { EtherealMist } from "../environment/EtherealMist";
@@ -35,6 +36,7 @@ export class App {
   private darkMeadow: DarkMeadow;
   private etherealMist: EtherealMist;
   private dustStreams: DustStreams;
+  private breathStream: BreathStream;
   private levitation: Levitation;
   private worldRoot: THREE.Group;
   private isRunning = false;
@@ -85,6 +87,10 @@ export class App {
 
     this.dustStreams = new DustStreams();
     this.worldRoot.add(this.dustStreams.group);
+
+    // Breath stream — lives in scene space so particles stay put in the world
+    this.breathStream = new BreathStream();
+    this.scene.add(this.breathStream.group);
 
     // Levitation
     this.levitation = new Levitation();
@@ -274,6 +280,10 @@ export class App {
     this.dustStreams.setSoulWorldPos(soulWorldPos);
     this.dustStreams.setSoulPos(headPos);
     this.dustStreams.update(delta, elapsed);
+
+    // Breath stream: mouth just below and ahead of head
+    this.breathStream.setMouth(headPos, headDirection);
+    this.breathStream.update(delta, elapsed);
 
     this.renderer.render(this.scene, this.camera);
   }

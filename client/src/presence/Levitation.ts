@@ -95,6 +95,25 @@ const GROUND_REPULSION_K = 2.0;
 /** PARAM: Seconds to coast on last hand values after tracking loss. */
 const GRACE_PERIOD = 0.5;
 
+// ── Superman arm extension ──────────────────────────────────────────
+/**
+ * PARAM: How far (m) each hand must be in front of the head to trigger
+ * superman mode. ~0.4–0.5 m = arms clearly outstretched forward.
+ */
+const SUPERMAN_THRESHOLD = 0.45;
+
+/**
+ * PARAM: Distance (m) over which superman factor ramps from 0 → 1
+ * above SUPERMAN_THRESHOLD.
+ */
+const SUPERMAN_RAMP = 0.35;
+
+/** PARAM: Speed multiplier at peak superman (MAX_SPEED × this). */
+const SUPERMAN_SPEED_MULT = 2.8;
+
+/** PARAM: Thrust multiplier at peak superman. */
+const SUPERMAN_THRUST_BOOST = 3.0;
+
 // ── One‑Euro filter defaults ─────────────────────────────────────────
 /** PARAM: Minimum cutoff Hz (lower = smoother, more latency). */
 const FILTER_MIN_CUTOFF = 1.5;
@@ -213,6 +232,12 @@ export class Levitation {
   private lastPitchBias = 0;
   private timeSinceHands = 0;
 
+  // ── Superman state ───────────────────────────────────────────
+  private _supermanFactor = 0;
+
+  /** 0–1: how much the arms-forward superman boost is active. */
+  get supermanFactor(): number { return this._supermanFactor; }
+
   // ── Filters ────────────────────────────────────────────────
   private leftHandFilter = new Vec3Filter();
   private rightHandFilter = new Vec3Filter();
@@ -303,6 +328,21 @@ export class Levitation {
                 + handSpread * THRUST_W_SPREAD;
       handThrust = Math.min(raw * 2.0, 1.0) * MAX_HAND_THRUST;
 
+      // ─ Superman: both arms extended forward ─
+      // Measure each hand's forward projection from the head,
+      // then take the minimum so BOTH arms must be out.
+      if (leftActive && rightActive) {
+        const lFwd = Math.max(0, fLeft.clone().sub(headPos).dot(headForward));
+        const rFwd = Math.max(0, fRight.clone().sub(headPos).dot(headForward));
+        const minFwd = Math.min(lFwd, rFwd);
+        const raw2 = (minFwd - SUPERMAN_THRESHOLD) / SUPERMAN_RAMP;
+        this._supermanFactor = this._supermanFactor * 0.92
+          + Math.max(0, Math.min(raw2, 1.0)) * 0.08;
+      } else {
+        // Fade out when one or both hands lost
+        this._supermanFactor *= 0.92;
+      }
+
       // ─ Lateral steering (yaw) ─
       lateralSteer = this._handDelta.dot(this._right) * HAND_STEER_GAIN;
 
@@ -344,7 +384,8 @@ export class Levitation {
     }
 
     // ── Compute acceleration ────────────────────────────────────
-    const totalThrust = BASE_THRUST + handThrust;
+    const thrustBoost = 1 + (SUPERMAN_THRUST_BOOST - 1) * this._supermanFactor;
+    const totalThrust = (BASE_THRUST + handThrust) * thrustBoost;
     this._accel.set(0, 0, 0);
 
     // Split thrust: HEAD_DIRECT_BLEND goes straight in head direction,
@@ -394,10 +435,11 @@ export class Levitation {
     this.velocity.z *= dampH;
     this.velocity.y *= dampV;
 
-    // ── Speed cap ───────────────────────────────────────────────
+    // ── Speed cap (superman raises the ceiling) ─────────────────
+    const effectiveMaxSpeed = MAX_SPEED * (1 + (SUPERMAN_SPEED_MULT - 1) * this._supermanFactor);
     const finalSpeed = this.velocity.length();
-    if (finalSpeed > MAX_SPEED) {
-      this.velocity.multiplyScalar(MAX_SPEED / finalSpeed);
+    if (finalSpeed > effectiveMaxSpeed) {
+      this.velocity.multiplyScalar(effectiveMaxSpeed / finalSpeed);
     }
 
     // ── Soft ground clamp ───────────────────────────────────────
@@ -425,6 +467,7 @@ export class Levitation {
     this.lastLateralSteer = 0;
     this.lastPitchBias = 0;
     this.timeSinceHands = 0;
+    this._supermanFactor = 0;
     this.leftHandFilter.reset();
     this.rightHandFilter.reset();
   }
