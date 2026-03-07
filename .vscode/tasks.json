@@ -1,0 +1,10 @@
+﻿{"version":"2.0.0","tasks":[
+    {
+      "label": "Refresh Copilot Memory",
+      "type": "shell",
+      "command": "powershell -NonInteractive -File \"C:\\\\Users\\\\danre\\\\.vscode\\\\scripts\\\\update-copilot-memory.ps1\"",
+      "runOptions": { "runOn": "folderOpen" },
+      "presentation": { "reveal": "silent", "panel": "dedicated", "close": true },
+      "problemMatcher": []
+    }
+]}
