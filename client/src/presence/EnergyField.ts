@@ -1,16 +1,15 @@
 import * as THREE from "three";
 
 /**
- * EnergyField — the user's visible self as a flowing iridescent volume.
+ * EnergyField — Bill Viola-inspired body of cascading light.
  *
- * Inspired by raymarched iridescent distance fields (Shadertoy "rotate i" style).
- * Instead of thousands of discrete particles, the user is surrounded by a
- * continuous luminous form — prismatic light that flows, breathes, and reacts
- * to hand movement. The iridescence comes from view-angle-dependent color
- * using dot-product hue shifting.
+ * The user's body is a human silhouette made entirely of light that
+ * streams downward like luminous water. Built from capsule SDFs (torso + arms)
+ * with downward-scrolling FBM noise creating the cascade effect.
  *
- * Rendered on an icosphere mesh centered on the user, with raymarching
- * happening in the fragment shader using the mesh surface as the entry point.
+ * Head/upper torso glows brightest. Light dims and breaks into streaming
+ * trails below the hips, dissolving before reaching the ground.
+ * Blue-white palette with warm white at peak density.
  */
 
 const VERTEX = /* glsl */ `
@@ -45,138 +44,173 @@ const FRAGMENT = /* glsl */ `
   varying vec3 vLocalPos;
   varying vec3 vNormal;
 
-  #define PI 3.141596
-  #define TAU 6.283185
+  // ── Noise ────────────────────────────────────────────────────
+  float hash(float n) { return fract(sin(n) * 43758.5453123); }
 
-  // Rotation matrix for domain warping
-  mat2 rotate(float a) {
-    float s = sin(a);
-    float c = cos(a);
-    return mat2(c, -s, s, c);
+  float noise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float n = dot(i, vec3(1.0, 57.0, 113.0));
+    return mix(
+      mix(mix(hash(n),         hash(n + 1.0),   f.x),
+          mix(hash(n + 57.0),  hash(n + 58.0),  f.x), f.y),
+      mix(mix(hash(n + 113.0), hash(n + 114.0), f.x),
+          mix(hash(n + 170.0), hash(n + 171.0), f.x), f.y),
+      f.z);
   }
 
-  // FBM noise for organic distortion
   float fbm(vec3 p) {
-    float n = 0.0;
-    for (int i = 0; i < 4; i++) {
-      n += abs(dot(cos(p), vec3(0.1)));
-      p *= 1.8;
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 3; i++) {
+      v += a * noise(p);
+      p = p * 2.0 + vec3(100.0);
+      a *= 0.5;
     }
-    return n;
+    return v;
+  }
+
+  // ── SDF primitives ───────────────────────────────────────────
+  float sdCapsule(vec3 p, vec3 a, vec3 b, float r) {
+    vec3 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h) - r;
+  }
+
+  float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+  }
+
+  // ── Body SDF ─────────────────────────────────────────────────
+  float bodyField(vec3 p) {
+    // Torso: crown of head to hips
+    vec3 headTop = uHeadPos + vec3(0.0, 0.12, 0.0);
+    vec3 hips    = uHeadPos + vec3(0.0, -0.6, 0.0);
+    float torso  = sdCapsule(p, headTop, hips, 0.16);
+
+    // Head: slightly wider at crown
+    float head = length(p - uHeadPos - vec3(0.0, 0.05, 0.0)) - 0.13;
+    torso = smin(torso, head, 0.08);
+
+    float body = torso;
+
+    // Arms — only when tracked
+    if (uLeftHandActive > 0.5) {
+      vec3 shoulder = uHeadPos + vec3(-0.2, -0.18, 0.0);
+      body = smin(body, sdCapsule(p, shoulder, uLeftHandPos, 0.05), 0.1);
+    }
+    if (uRightHandActive > 0.5) {
+      vec3 shoulder = uHeadPos + vec3(0.2, -0.18, 0.0);
+      body = smin(body, sdCapsule(p, shoulder, uRightHandPos, 0.05), 0.1);
+    }
+
+    return body;
   }
 
   void main() {
     float T = uTime;
 
-    // Ray from camera through this fragment
-    vec3 ro = cameraPosition;
     vec3 rd = normalize(vWorldPos - cameraPosition);
+    vec3 center = uHeadPos - vec3(0.0, 0.3, 0.0);
+    float zMax = 2.5;
 
-    // Raymarch volume centered on head position
-    vec3 center = uHeadPos;
-    float zMax = 1.5;  // max march depth (volume radius)
-    float z = 0.05;
+    vec3 entryPoint = vWorldPos;
+    if (length(entryPoint - center) > zMax * 1.5) discard;
 
-    vec3 col = vec3(0.0);
+    vec3 col  = vec3(0.0);
     float totalAlpha = 0.0;
 
-    // Start from the mesh surface
-    vec3 entryPoint = vWorldPos;
-    float entryDist = length(entryPoint - center);
+    float cascadeSpeed = 1.8;
+    float z = 0.05;
 
-    // Only march if we're within the volume
-    if (entryDist > zMax * 2.0) discard;
-
-    // Breathing modulation
-    float breathScale = 1.0 + uBreath * 0.1;
-
-    for (float i = 0.0; i < 60.0; i++) {
+    for (float i = 0.0; i < 50.0; i++) {
       vec3 p = entryPoint + rd * z;
 
-      // Relative to field center
-      vec3 rp = (p - center) / breathScale;
+      // Body distance
+      float bd = bodyField(p);
 
-      // Hand influence — warp space near hands
-      if (uLeftHandActive > 0.5) {
-        vec3 toHand = p - uLeftHandPos;
-        float handDist = length(toHand);
-        float influence = smoothstep(0.8, 0.0, handDist);
-        // Swirl space around hand
-        rp.xz *= rotate(influence * uLeftHandSpeed * 2.0);
-        rp.yz *= rotate(influence * uLeftHandSpeed * 1.3);
-        // Push density outward
-        rp += normalize(toHand + vec3(0.001)) * influence * uLeftHandSpeed * 0.2;
-      }
+      // Height relative to head
+      float relY = p.y - uHeadPos.y;
 
-      if (uRightHandActive > 0.5) {
-        vec3 toHand = p - uRightHandPos;
-        float handDist = length(toHand);
-        float influence = smoothstep(0.8, 0.0, handDist);
-        rp.xz *= rotate(-influence * uRightHandSpeed * 2.0);
-        rp.yz *= rotate(-influence * uRightHandSpeed * 1.3);
-        rp += normalize(toHand + vec3(0.001)) * influence * uRightHandSpeed * 0.2;
-      }
+      // ── Cascading noise (scrolls downward) ─────────────────
+      vec3 cp = p * 3.5;
+      cp.y -= T * cascadeSpeed;
+      float cascade = fbm(cp);
 
-      // Domain rotation — creates the flowing, twisting form
-      rp.xz *= rotate(T * 0.3 + i * 0.02);
-      rp.yz *= rotate(T * 0.2 + i * 0.015);
+      // Fine detail (cheaper single noise lookup)
+      float fine = noise(p * 8.0 + vec3(0.0, -T * cascadeSpeed * 1.4, 0.0));
 
-      // Distance field with FBM distortion
-      float d = length(rp) - 0.4;
-      d = abs(d) * 0.6 + 0.01;
+      // Create vein-like streaming patterns
+      float veins = 1.0 - abs(cascade - 0.5) * 2.0;
+      veins = pow(max(veins, 0.0), 2.5);
 
-      // FBM adds organic complexity
-      d += fbm(rp * 1.8 + T * 0.2) * 0.2;
+      float fineVeins = 1.0 - abs(fine - 0.5) * 2.0;
+      fineVeins = pow(max(fineVeins, 0.0), 3.0);
 
-      // Iridescent color — view-angle and position-dependent
-      // This is the key technique from the reference:
-      // color shifts based on dot product of position with a constant,
-      // creating prismatic rainbow refraction
-      vec3 iridescence = (1.1 + sin(vec3(3.0, 2.0, 1.0) + dot(rp, vec3(1.0)) + T * 0.5)) / d;
+      float stream = veins * 0.7 + fineVeins * 0.3;
 
-      // Hand proximity warm shift
-      float handWarmth = 0.0;
+      // ── Density ────────────────────────────────────────────
+      float density = 0.0;
+
+      // Inside body: bright cascading light
+      float bodyMask = smoothstep(0.12, -0.06, bd);
+      density += bodyMask * (0.3 + stream * 0.7);
+
+      // Surface glow: luminous edge
+      density += smoothstep(0.08, 0.0, abs(bd)) * 0.4;
+
+      // Streaming below body — light pours from the hips
+      float belowHips = smoothstep(uHeadPos.y - 0.4, uHeadPos.y - 0.7, p.y);
+      float colRadius = 0.2 + belowHips * 0.5;
+      float colDist   = length(p.xz - uHeadPos.xz);
+      float streamCol = smoothstep(colRadius, colRadius * 0.2, colDist);
+      float streamFade = smoothstep(uHeadPos.y - 2.5, uHeadPos.y - 0.6, p.y);
+      density += streamCol * stream * belowHips * streamFade * 0.45;
+
+      // Hand disturbance — movement scatters light
       if (uLeftHandActive > 0.5) {
         float dL = distance(p, uLeftHandPos);
-        handWarmth += smoothstep(0.6, 0.0, dL) * uLeftHandSpeed;
+        density += smoothstep(0.4, 0.0, dL) * uLeftHandSpeed * stream * 0.3;
       }
       if (uRightHandActive > 0.5) {
         float dR = distance(p, uRightHandPos);
-        handWarmth += smoothstep(0.6, 0.0, dR) * uRightHandSpeed;
+        density += smoothstep(0.4, 0.0, dR) * uRightHandSpeed * stream * 0.3;
       }
-      handWarmth = min(handWarmth, 1.0);
 
-      // Warm shift near hands
-      vec3 warmShift = vec3(0.3, 0.1, -0.2) * handWarmth;
-      iridescence += warmShift;
+      // ── Height brightness (Viola: head brightest) ──────────
+      float heightBright = smoothstep(-2.0, 0.3, relY);
+      heightBright = 0.3 + heightBright * 0.7;
+      density *= heightBright;
 
-      // Accumulate color with depth-based falloff
-      float density = 1.0 / (d * d * 200.0 + 1.0);
-      col += iridescence * density * 0.035;
-      totalAlpha += density * 0.04;
+      // ── Color: blue-white, warming at peak density ─────────
+      vec3 coolBlue  = vec3(0.35, 0.45, 0.9);
+      vec3 paleBlue  = vec3(0.6, 0.72, 1.0);
+      vec3 warmWhite = vec3(1.0, 0.95, 0.88);
 
-      // Adaptive step — larger steps in empty space
-      z += max(d * 0.5, 0.01);
+      vec3 lightCol = mix(coolBlue, paleBlue, heightBright);
+      lightCol = mix(lightCol, warmWhite, density * heightBright);
 
+      // Accumulate
+      col += lightCol * density * 0.06;
+      totalAlpha += density * 0.05;
+
+      // Adaptive step — finer near the body surface
+      float step = bd < 0.25 ? 0.025 : max(bd * 0.4, 0.03);
+      z += step;
       if (z > zMax) break;
     }
 
-    // Tone mapping
-    col = tanh(col * 0.8);
+    // Tone map
+    col = tanh(col * 1.2);
 
-    // Edge fade — soften the volume boundary
-    float edgeFade = smoothstep(zMax, zMax * 0.3, length(entryPoint - center));
-    totalAlpha *= edgeFade;
+    // Edge fade
+    totalAlpha *= smoothstep(zMax, zMax * 0.3, length(entryPoint - center));
 
-    // Breathing alpha modulation
-    totalAlpha *= 0.7 + uBreath * 0.3;
+    // Breathing modulation
+    totalAlpha *= 0.8 + uBreath * 0.2;
 
-    // Movement intensity boost
-    totalAlpha *= 1.0 + uMovementIntensity * 0.5;
-
-    totalAlpha = clamp(totalAlpha, 0.0, 0.85);
-
-    // Discard near-invisible fragments
+    totalAlpha = clamp(totalAlpha, 0.0, 0.9);
     if (totalAlpha < 0.005) discard;
 
     gl_FragColor = vec4(col, totalAlpha);
@@ -202,8 +236,8 @@ export class EnergyField {
   constructor() {
     this.group = new THREE.Group();
 
-    // Icosphere volume container — large enough to encompass the user
-    this.geometry = new THREE.IcosahedronGeometry(1.2, 4);
+    // Large enough to contain the full body + streaming trails below
+    this.geometry = new THREE.IcosahedronGeometry(2.5, 4);
 
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERTEX,
@@ -223,7 +257,7 @@ export class EnergyField {
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      side: THREE.BackSide, // Render inside of sphere — we're inside it
+      side: THREE.BackSide,
     });
 
     this.mesh = new THREE.Mesh(this.geometry, this.material);
@@ -252,9 +286,9 @@ export class EnergyField {
   }
 
   update(_delta: number, elapsed: number): void {
-    // Move the mesh to follow the user
+    // Center the volume on the body (slightly below head)
     this.mesh.position.copy(this.headPos);
-    this.mesh.position.y -= 0.2; // center slightly below head (torso area)
+    this.mesh.position.y -= 0.3;
 
     const u = this.material.uniforms;
     u.uTime.value = elapsed;

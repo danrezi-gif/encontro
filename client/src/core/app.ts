@@ -14,9 +14,9 @@ import { Levitation } from "../presence/Levitation";
  * Main application — bootstraps the Three.js scene, WebXR session,
  * energy field presence, and the animation loop.
  *
- * The user's presence is rendered as two layered fields:
- * - EnergyField: raymarched iridescent volume (inner core, prismatic liquid light)
- * - EnergyFieldBokeh: flowing bokeh gradient orbs (outer aura, soft color blobs)
+ * The user's presence is rendered as a Bill Viola-inspired body of cascading light:
+ * - EnergyField: raymarched body SDF with downward-flowing light (the figure)
+ * - EnergyFieldBokeh: subtle ambient glow beneath the body (scattered light)
  *
  * Both react to hand tracking and movement. The light trail adds
  * ephemeral traces from arm sweeps.
@@ -76,10 +76,10 @@ export class App {
     this.scene.add(this.worldRoot);
 
     this.cosmicSky = new CosmicSky(2500);
-    this.worldRoot.add(this.cosmicSky.group);
+    this.scene.add(this.cosmicSky.group); // sky stays fixed — stars don't shift with levitation
 
     this.darkMeadow = new DarkMeadow();
-    this.worldRoot.add(this.darkMeadow.group);
+    this.worldRoot.add(this.darkMeadow.group); // ground moves with levitation
 
     // Levitation — rises the user by translating the world downward
     this.levitation = new Levitation();
@@ -231,6 +231,7 @@ export class App {
     // Update subsystems
     this.input.update(delta, elapsed);
     this.cosmicSky.update(delta, elapsed);
+    this.darkMeadow.setTracking(headPos);
     this.darkMeadow.update(delta, elapsed);
 
     this.renderer.render(this.scene, this.camera);
