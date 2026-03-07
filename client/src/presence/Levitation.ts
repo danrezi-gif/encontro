@@ -35,8 +35,7 @@ export class Levitation {
   // ── Drift accumulator (world-space XZ) ───────────────────────
   private driftVelocity = new THREE.Vector3(0, 0, 0);
 
-  // ── Bobbing ──────────────────────────────────────────────────
-  private bobPhase = 0;
+  // (bob removed — sacred stillness, not playful bounce)
 
   // ── Temp vectors (reused to avoid GC) ────────────────────────
   private _avgHand = new THREE.Vector3();
@@ -52,15 +51,13 @@ export class Levitation {
   /** Base lift rate (metres/sec at full ease) */
   private readonly LIFT_RATE = 0.12;
   /** Forward drift speed at full height (metres/sec) */
-  private readonly DRIFT_FORWARD = 0.2;
+  private readonly DRIFT_FORWARD = 0.35;
   /** How much hand vertical gesture influences height (metres/sec per metre offset) */
   private readonly HAND_VERTICAL_GAIN = 0.15;
   /** How much hand lateral spread influences drift direction (metres/sec per metre offset) */
   private readonly HAND_LATERAL_GAIN = 0.06;
-  /** Bobbing amplitude (metres) */
-  private readonly BOB_AMPLITUDE = 0.06;
-  /** Bobbing frequency (rad/sec) */
-  private readonly BOB_FREQ = 0.7;
+  /** How much hand forward gesture influences drift direction */
+  private readonly HAND_FORWARD_GAIN = 0.15;
 
   // ─────────────────────────────────────────────────────────────
   update(
@@ -182,25 +179,32 @@ export class Levitation {
 
         // ── Forward drift ──────────────────────────────────────
         const driftMag = this.DRIFT_FORWARD * eased;
-        // Base forward
+
+        // Base forward from head facing
         this.driftVelocity.set(
           -headForward.x * driftMag,
           0,
           -headForward.z * driftMag,
         );
-        // Lateral hand influence
-        const right2 = new THREE.Vector3()
-          .crossVectors(headForward, new THREE.Vector3(0, 1, 0))
-          .normalize();
-        this.driftVelocity.addScaledVector(right2, -handLateralDelta);
+
+        // Hand-direction influence: hands reaching forward amplifies drift
+        if (handsActive > 0) {
+          this._handDelta.copy(this._avgHand).sub(headPos);
+          const handForwardAmount = this._handDelta.dot(headForward);
+          // Hands extended forward → boost forward drift
+          const forwardBoost = Math.max(0, handForwardAmount) * this.HAND_FORWARD_GAIN;
+          this.driftVelocity.x -= headForward.x * forwardBoost;
+          this.driftVelocity.z -= headForward.z * forwardBoost;
+
+          // Lateral hand influence
+          const right2 = new THREE.Vector3()
+            .crossVectors(headForward, new THREE.Vector3(0, 1, 0))
+            .normalize();
+          this.driftVelocity.addScaledVector(right2, -handLateralDelta);
+        }
 
         this.offset.x += this.driftVelocity.x * delta;
         this.offset.z += this.driftVelocity.z * delta;
-
-        // ── Gentle bobbing ─────────────────────────────────────
-        this.bobPhase += delta * this.BOB_FREQ;
-        const bob = Math.sin(this.bobPhase) * this.BOB_AMPLITUDE * eased;
-        this.offset.y += bob;
 
         break;
       }
@@ -214,7 +218,6 @@ export class Levitation {
     this.liftProgress = 0;
     this.offset.set(0, 0, 0);
     this.driftVelocity.set(0, 0, 0);
-    this.bobPhase = 0;
   }
 
   /** Current phase name (useful for debugging / UI). */

@@ -5,7 +5,6 @@ import { InputManager } from "./input";
 import { XRSessionManager } from "../xr/XRSessionManager";
 import { EnergyField } from "../presence/EnergyField";
 import { EnergyFieldBokeh } from "../presence/EnergyFieldBokeh";
-import { LightTrail } from "../presence/LightTrail";
 import { CosmicSky } from "../environment/CosmicSky";
 import { DarkMeadow } from "../environment/DarkMeadow";
 import { Levitation } from "../presence/Levitation";
@@ -18,8 +17,8 @@ import { Levitation } from "../presence/Levitation";
  * - EnergyField: raymarched body SDF with downward-flowing light (the figure)
  * - EnergyFieldBokeh: subtle ambient glow beneath the body (scattered light)
  *
- * Both react to hand tracking and movement. The light trail adds
- * ephemeral traces from arm sweeps.
+ * Hand gestures steer the aura — the ground illumination follows
+ * the direction the user's hands point.
  */
 export class App {
   private renderer: THREE.WebGLRenderer;
@@ -30,11 +29,10 @@ export class App {
   private xr: XRSessionManager;
   private energyField: EnergyField;
   private energyFieldBokeh: EnergyFieldBokeh;
-  private lightTrail: LightTrail;
   private cosmicSky: CosmicSky;
   private darkMeadow: DarkMeadow;
   private levitation: Levitation;
-  private worldRoot: THREE.Group; // environment objects — moved by levitation
+  private worldRoot: THREE.Group;
   private isRunning = false;
   private vrButton: HTMLElement | null = null;
 
@@ -43,9 +41,12 @@ export class App {
   private rightHandSpeedSmooth = 0;
   private movementIntensitySmooth = 0;
 
-  // Desktop camera velocity tracking (for levitation stillness detection)
+  // Desktop camera velocity tracking
   private prevCameraPos = new THREE.Vector3(0, 1.6, 0);
   private desktopHeadVelocity = new THREE.Vector3();
+
+  // Smoothed gesture direction (head → avg hand, world space)
+  private gestureDir = new THREE.Vector3();
 
   constructor(private canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -55,36 +56,28 @@ export class App {
     this.clock = new THREE.Clock();
     this.input = new InputManager(this.renderer, this.camera);
 
-    // XR session manager — handles VR lifecycle and hand tracking
     this.xr = new XRSessionManager(this.renderer);
 
-    // Energy fields — layered for depth
-    // Inner: raymarched iridescent volume (prismatic liquid core)
+    // Body of cascading light
     this.energyField = new EnergyField();
     this.scene.add(this.energyField.group);
 
-    // Outer: flowing bokeh gradient orbs (soft aura)
+    // Subtle ambient glow beneath
     this.energyFieldBokeh = new EnergyFieldBokeh();
     this.scene.add(this.energyFieldBokeh.group);
 
-    // Light trail — ephemeral traces from hand movement
-    this.lightTrail = new LightTrail(2000);
-    this.scene.add(this.lightTrail.group);
-
-    // Environment — parented to worldRoot so levitation can move them
+    // Environment
     this.worldRoot = new THREE.Group();
     this.scene.add(this.worldRoot);
 
     this.cosmicSky = new CosmicSky(2500);
-    this.scene.add(this.cosmicSky.group); // sky stays fixed — stars don't shift with levitation
+    this.scene.add(this.cosmicSky.group); // sky stays fixed during levitation
 
     this.darkMeadow = new DarkMeadow();
-    this.worldRoot.add(this.darkMeadow.group); // ground moves with levitation
+    this.worldRoot.add(this.darkMeadow.group);
 
-    // Levitation — rises the user by translating the world downward
+    // Levitation
     this.levitation = new Levitation();
-
-    // Reset levitation when entering/exiting VR
     this.xr.onSessionStart(() => this.levitation.reset());
     this.xr.onSessionEnd(() => this.levitation.reset());
 
@@ -92,7 +85,6 @@ export class App {
     window.addEventListener("resize", this.handleResize);
     this.handleResize();
 
-    // Create VR entry button
     this.createVRButton();
   }
 
@@ -110,10 +102,17 @@ export class App {
     const delta = this.clock.getDelta();
     const elapsed = this.clock.getElapsedTime();
 
-    // Update XR tracking (extracts hand/head positions from XR frame)
     this.xr.update(frame, delta);
 
-    // Determine head position — XR camera or desktop camera
+    // ── Desktop velocity (compute FIRST so we can use it below) ──
+    if (!this.xr.isPresenting) {
+      this.desktopHeadVelocity
+        .subVectors(this.camera.position, this.prevCameraPos)
+        .divideScalar(Math.max(delta, 0.001));
+      this.prevCameraPos.copy(this.camera.position);
+    }
+
+    // Head position
     const headPos = new THREE.Vector3();
     if (this.xr.isPresenting) {
       headPos.copy(this.xr.head.position);
@@ -121,46 +120,76 @@ export class App {
       headPos.copy(this.camera.position);
     }
 
-    // Smooth hand speeds (exponential moving average)
+    // Head speed — works on both XR and desktop now
+    const headSpeed = this.xr.isPresenting
+      ? this.xr.head.velocity.length()
+      : this.desktopHeadVelocity.length();
+
+    // Smooth hand speeds
     const leftSpeed = this.xr.leftHand.active ? this.xr.leftHand.velocity.length() : 0;
     const rightSpeed = this.xr.rightHand.active ? this.xr.rightHand.velocity.length() : 0;
     this.leftHandSpeedSmooth = this.leftHandSpeedSmooth * 0.85 + leftSpeed * 0.15;
     this.rightHandSpeedSmooth = this.rightHandSpeedSmooth * 0.85 + rightSpeed * 0.15;
 
-    // Overall movement intensity from head velocity
-    const headSpeed = this.xr.isPresenting ? this.xr.head.velocity.length() : 0;
-    this.movementIntensitySmooth = this.movementIntensitySmooth * 0.9 + Math.min(headSpeed * 0.5, 1.0) * 0.1;
+    // Overall movement intensity
+    this.movementIntensitySmooth = this.movementIntensitySmooth * 0.9
+      + Math.min(headSpeed * 0.5, 1.0) * 0.1;
 
-    // Determine hand positions
+    // Hand positions
     const leftHandPos = new THREE.Vector3();
     const rightHandPos = new THREE.Vector3();
     let leftActive = this.xr.leftHand.active;
     let rightActive = this.xr.rightHand.active;
 
+    // Head forward (horizontal)
+    const headForward = new THREE.Vector3();
+    if (this.xr.isPresenting) {
+      const xrCam = this.renderer.xr.getCamera();
+      xrCam.getWorldDirection(headForward);
+    } else {
+      this.camera.getWorldDirection(headForward);
+    }
+    headForward.y = 0;
+    headForward.normalize();
+
     if (this.xr.isPresenting) {
       leftHandPos.copy(this.xr.leftHand.position);
       rightHandPos.copy(this.xr.rightHand.position);
     } else {
-      // Desktop: simulate hands offset from camera for visual testing
-      const forward = new THREE.Vector3();
-      this.camera.getWorldDirection(forward);
-      const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+      // Desktop: simulate hands offset from camera
+      const right = new THREE.Vector3().crossVectors(headForward, new THREE.Vector3(0, 1, 0)).normalize();
 
       leftHandPos.copy(this.camera.position)
         .addScaledVector(right, -0.3)
-        .addScaledVector(forward, 0.4);
+        .addScaledVector(headForward, 0.4);
       leftHandPos.y -= 0.3;
 
       rightHandPos.copy(this.camera.position)
         .addScaledVector(right, 0.3)
-        .addScaledVector(forward, 0.4);
+        .addScaledVector(headForward, 0.4);
       rightHandPos.y -= 0.3;
 
       leftActive = true;
       rightActive = true;
-      this.leftHandSpeedSmooth = this.movementIntensitySmooth * 2;
-      this.rightHandSpeedSmooth = this.movementIntensitySmooth * 2;
+
+      // Desktop hand speeds derive from camera velocity
+      const desktopSpeed = this.desktopHeadVelocity.length();
+      this.leftHandSpeedSmooth = this.leftHandSpeedSmooth * 0.85 + desktopSpeed * 0.5 * 0.15;
+      this.rightHandSpeedSmooth = this.rightHandSpeedSmooth * 0.85 + desktopSpeed * 0.5 * 0.15;
     }
+
+    // ── Gesture direction (head → avg hand) ─────────────────────
+    const rawGesture = new THREE.Vector3();
+    if (leftActive || rightActive) {
+      const avgHand = new THREE.Vector3();
+      let count = 0;
+      if (leftActive) { avgHand.add(leftHandPos); count++; }
+      if (rightActive) { avgHand.add(rightHandPos); count++; }
+      if (count > 0) avgHand.divideScalar(count);
+      rawGesture.subVectors(avgHand, headPos);
+    }
+    // Smooth it
+    this.gestureDir.lerp(rawGesture, Math.min(1, delta * 4));
 
     // Tracking data shared by both energy field layers
     const trackingArgs: [
@@ -174,44 +203,17 @@ export class App {
       this.movementIntensitySmooth,
     ];
 
-    // Update both energy field layers
     this.energyField.setTracking(...trackingArgs);
     this.energyField.update(delta, elapsed);
 
     this.energyFieldBokeh.setTracking(...trackingArgs);
     this.energyFieldBokeh.update(delta, elapsed);
 
-    // Emit light trails from hand movement
-    this.lightTrail.emit(
-      elapsed, delta,
-      leftHandPos, rightHandPos,
-      leftActive, rightActive,
-      this.leftHandSpeedSmooth, this.rightHandSpeedSmooth,
-    );
-    this.lightTrail.update(delta, elapsed);
-
-    // ── Levitation ─────────────────────────────────────────────
-    // Compute head forward direction (horizontal only)
-    const headForward = new THREE.Vector3();
-    if (this.xr.isPresenting) {
-      // In XR, use the camera's forward from the XR camera
-      const xrCam = this.renderer.xr.getCamera();
-      xrCam.getWorldDirection(headForward);
-    } else {
-      this.camera.getWorldDirection(headForward);
-    }
-    headForward.y = 0;
-    headForward.normalize();
-
-    // Compute head velocity for levitation (desktop: derive from camera movement)
+    // ── Levitation ──────────────────────────────────────────────
     let headVelocity: THREE.Vector3;
     if (this.xr.isPresenting) {
       headVelocity = this.xr.head.velocity;
     } else {
-      this.desktopHeadVelocity
-        .subVectors(this.camera.position, this.prevCameraPos)
-        .divideScalar(Math.max(delta, 0.001));
-      this.prevCameraPos.copy(this.camera.position);
       headVelocity = this.desktopHeadVelocity;
     }
 
@@ -225,21 +227,17 @@ export class App {
       headForward,
     );
 
-    // Apply levitation offset to the world root (world moves down = user rises)
     this.worldRoot.position.copy(this.levitation.offset);
 
-    // Update subsystems
+    // ── Subsystems ──────────────────────────────────────────────
     this.input.update(delta, elapsed);
     this.cosmicSky.update(delta, elapsed);
-    this.darkMeadow.setTracking(headPos);
+    this.darkMeadow.setTracking(headPos, this.gestureDir);
     this.darkMeadow.update(delta, elapsed);
 
     this.renderer.render(this.scene, this.camera);
   }
 
-  /**
-   * VR entry button — minimal, glowing, matching encontro aesthetic.
-   */
   private createVRButton(): void {
     if (!navigator.xr) {
       console.log("[App] WebXR not available — desktop mode only");
@@ -300,7 +298,6 @@ export class App {
       document.body.appendChild(btn);
       this.vrButton = btn;
 
-      // Fade in
       btn.style.opacity = "0";
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -325,7 +322,6 @@ export class App {
     this.xr.dispose();
     this.energyField.dispose();
     this.energyFieldBokeh.dispose();
-    this.lightTrail.dispose();
     this.cosmicSky.dispose();
     this.darkMeadow.dispose();
     this.renderer.dispose();
