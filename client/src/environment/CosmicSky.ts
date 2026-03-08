@@ -124,7 +124,7 @@ export class CosmicSky {
     for (let i = 0; i < starCount; i++) {
       const radius = 150 + Math.random() * 50;
 
-      // Distribute on sphere — with extra density along milky way band
+      // Distribute on sphere
       let theta = Math.random() * Math.PI * 2;
       let phi = Math.acos(2 * Math.random() - 1);
 
@@ -145,13 +145,19 @@ export class CosmicSky {
         bandPoint.applyAxisAngle(perpAxis, scatter);
         bandPoint.normalize().multiplyScalar(radius);
 
+        // Mirror below-ground stars to upper hemisphere
+        if (bandPoint.y < 0) bandPoint.y = -bandPoint.y;
+
         positions[i * 3] = bandPoint.x;
         positions[i * 3 + 1] = bandPoint.y;
         positions[i * 3 + 2] = bandPoint.z;
       } else {
-        positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
-        positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
-        positions[i * 3 + 2] = radius * Math.cos(phi);
+        const x = radius * Math.sin(phi) * Math.cos(theta);
+        const y = radius * Math.sin(phi) * Math.sin(theta);
+        const z = radius * Math.cos(phi);
+        positions[i * 3] = x;
+        positions[i * 3 + 1] = Math.abs(y); // upper hemisphere only
+        positions[i * 3 + 2] = z;
       }
 
       // Brightness follows power law — many dim stars, few bright ones
