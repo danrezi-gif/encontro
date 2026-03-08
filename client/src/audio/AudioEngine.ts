@@ -1,6 +1,9 @@
 /**
  * Audio system — Web Audio API.
  * Handles the background soundtrack and future generative audio layers.
+ *
+ * Accepts an optional pre-created AudioContext so the caller can create it
+ * synchronously inside a user gesture before doing heavy init work.
  */
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -10,19 +13,25 @@ export class AudioEngine {
   private initialized = false;
   private playing = false;
 
-  /** Must be called from user gesture (click/tap) */
+  constructor(existingCtx?: AudioContext) {
+    if (existingCtx) {
+      this.ctx = existingCtx;
+    }
+  }
+
+  /** Load the soundtrack. If no AudioContext was provided, creates one. */
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    // Create AudioContext synchronously inside the user gesture —
-    // browsers gate .resume() on gesture proximity, so we must not
-    // delay context creation behind an await.
-    this.ctx = new AudioContext();
+    if (!this.ctx) {
+      this.ctx = new AudioContext();
+    }
+
     this.gainNode = this.ctx.createGain();
     this.gainNode.gain.value = 0;
     this.gainNode.connect(this.ctx.destination);
 
-    // Resume immediately while still in the gesture handler
+    // Resume — may already be running if created in gesture context
     if (this.ctx.state === "suspended") {
       await this.ctx.resume();
     }
