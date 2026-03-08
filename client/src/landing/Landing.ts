@@ -231,13 +231,14 @@ export class Landing {
   }
 
   private enter(): void {
-    // Fade out
+    // Fire callback immediately so it runs inside the user gesture —
+    // required for AudioContext.resume() on Quest / mobile browsers.
+    this.onEnterCallback?.();
+
+    // Fade out landing overlay, then remove from DOM
     this.container.style.transition = "opacity 1.5s ease";
     this.container.style.opacity = "0";
-    setTimeout(() => {
-      this.dispose();
-      this.onEnterCallback?.();
-    }, 1600);
+    setTimeout(() => this.dispose(), 1600);
   }
 
   dispose(): void {
