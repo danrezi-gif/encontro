@@ -22,6 +22,7 @@ const SKY_VERTEX = /* glsl */ `
   attribute float starSize;
 
   uniform float uTime;
+  uniform float uSoulHeight;
 
   varying float vBrightness;
   varying float vTemperature;
@@ -35,7 +36,10 @@ const SKY_VERTEX = /* glsl */ `
     // Occasional sharper flicker for bright stars
     twinkle *= 0.95 + 0.05 * sin(uTime * twinkleSpeed * 3.7 + twinklePhase * 2.1);
 
-    vBrightness = brightness * twinkle;
+    // Stars brighten as soul rises — atmosphere thins
+    float heightBoost = 1.0 + smoothstep(5.0, 50.0, uSoulHeight) * 0.6;
+
+    vBrightness = brightness * twinkle * heightBoost;
     vTemperature = temperature;
     vTwinkle = twinkle;
 
@@ -187,6 +191,7 @@ export class CosmicSky {
       fragmentShader: SKY_FRAGMENT,
       uniforms: {
         uTime: { value: 0 },
+        uSoulHeight: { value: 0 },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -197,11 +202,19 @@ export class CosmicSky {
     this.group.add(this.points);
   }
 
+  private soulHeight = 0;
+
   update(_delta: number, elapsed: number): void {
     this.material.uniforms.uTime.value = elapsed;
+    this.material.uniforms.uSoulHeight.value = this.soulHeight;
 
     // Very slow celestial rotation — barely perceptible
     this.group.rotation.y = elapsed * 0.003;
+  }
+
+  /** Set soul altitude for height-based atmosphere effects. */
+  setHeight(h: number): void {
+    this.soulHeight = h;
   }
 
   dispose(): void {

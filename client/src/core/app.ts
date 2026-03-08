@@ -5,8 +5,11 @@ import { InputManager } from "./input";
 import { XRSessionManager } from "../xr/XRSessionManager";
 import { EnergyField } from "../presence/EnergyField";
 import { EnergyFieldBokeh } from "../presence/EnergyFieldBokeh";
+import { BreathStream } from "../presence/BreathStream";
 import { CosmicSky } from "../environment/CosmicSky";
 import { DarkMeadow } from "../environment/DarkMeadow";
+import { EtherealMist } from "../environment/EtherealMist";
+import { DustStreams } from "../environment/DustStreams";
 import { Levitation } from "../presence/Levitation";
 import { AudioEngine } from "../audio/AudioEngine";
 
@@ -32,6 +35,9 @@ export class App {
   private energyFieldBokeh: EnergyFieldBokeh;
   private cosmicSky: CosmicSky;
   private darkMeadow: DarkMeadow;
+  private etherealMist: EtherealMist;
+  private dustStreams: DustStreams;
+  private breathStream: BreathStream;
   private levitation: Levitation;
   private audio: AudioEngine;
   private worldRoot: THREE.Group;
@@ -77,6 +83,16 @@ export class App {
 
     this.darkMeadow = new DarkMeadow();
     this.worldRoot.add(this.darkMeadow.group);
+
+    this.etherealMist = new EtherealMist();
+    this.worldRoot.add(this.etherealMist.group);
+
+    this.dustStreams = new DustStreams();
+    this.worldRoot.add(this.dustStreams.group);
+
+    // Breath stream — lives in scene space so particles stay put in the world
+    this.breathStream = new BreathStream();
+    this.scene.add(this.breathStream.group);
 
     // Levitation
     this.levitation = new Levitation();
@@ -250,9 +266,33 @@ export class App {
 
     // ── Subsystems ──────────────────────────────────────────────
     this.input.update(delta, elapsed);
+
+    const soulHeight = this.levitation.height;
+
+    this.cosmicSky.setHeight(soulHeight);
     this.cosmicSky.update(delta, elapsed);
+
     this.darkMeadow.setTracking(headPos, this.gestureDir);
+    this.darkMeadow.setHeight(soulHeight);
     this.darkMeadow.update(delta, elapsed);
+
+    // Soul position in world-root space for mist/dust parting
+    const soulWorldPos = new THREE.Vector3(
+      headPos.x + this.levitation.offset.x,
+      headPos.y + this.levitation.offset.y,
+      headPos.z + this.levitation.offset.z,
+    );
+
+    this.etherealMist.setSoulPos(soulWorldPos);
+    this.etherealMist.update(delta, elapsed);
+
+    this.dustStreams.setSoulWorldPos(soulWorldPos);
+    this.dustStreams.setSoulPos(headPos);
+    this.dustStreams.update(delta, elapsed);
+
+    // Breath stream: mouth just below and ahead of head
+    this.breathStream.setMouth(headPos, headDirection);
+    this.breathStream.update(delta, elapsed);
 
     this.renderer.render(this.scene, this.camera);
   }
@@ -344,6 +384,8 @@ export class App {
     this.energyFieldBokeh.dispose();
     this.cosmicSky.dispose();
     this.darkMeadow.dispose();
+    this.etherealMist.dispose();
+    this.dustStreams.dispose();
     this.renderer.dispose();
     this.vrButton?.remove();
   }
