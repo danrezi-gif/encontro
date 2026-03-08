@@ -56,7 +56,7 @@ export class App {
   // Smoothed gesture direction (head → avg hand, world space)
   private gestureDir = new THREE.Vector3();
 
-  constructor(private canvas: HTMLCanvasElement, audioCtx?: AudioContext) {
+  constructor(private canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
     const { scene, camera } = createScene();
     this.scene = scene;
@@ -99,8 +99,7 @@ export class App {
     this.xr.onSessionStart(() => this.levitation.reset());
     this.xr.onSessionEnd(() => this.levitation.reset());
 
-    // Audio — pass pre-created AudioContext from user gesture
-    this.audio = new AudioEngine(audioCtx);
+    this.audio = new AudioEngine();
 
     this.handleResize = this.handleResize.bind(this);
     window.addEventListener("resize", this.handleResize);
@@ -109,13 +108,9 @@ export class App {
     this.createVRButton();
   }
 
-  async start(): Promise<void> {
+  start(): void {
     this.isRunning = true;
-
-    // Initialize audio from user gesture context, then start soundtrack
-    await this.audio.initialize();
-    await this.audio.playSoundtrack();
-
+    this.audio.play();
     this.renderer.setAnimationLoop((time, frame) => {
       this.update(time, frame);
     });

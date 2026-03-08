@@ -18,12 +18,7 @@ let app: App | null = null;
 const landing = new Landing(document.body);
 
 landing.onEnter(() => {
-  // Create AudioContext FIRST while user gesture is still active —
-  // the App constructor does heavy work (shaders, geometry) that can
-  // exhaust the gesture activation window on Quest.
-  const audioCtx = new AudioContext();
-
-  app = new App(canvas, audioCtx);
+  app = new App(canvas);
   app.start();
 });
 
