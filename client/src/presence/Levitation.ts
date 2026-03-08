@@ -3,14 +3,13 @@ import * as THREE from "three";
 /**
  * Levitation — head-directed soul flight.
  *
- * After a brief grounding period, the user begins to gently lift.
- * Head direction is the PRIMARY flight vector — look up to ascend,
- * look forward to glide, look down to descend slowly.
- * Hands provide thrust (extend arms = more speed) and fine steering
- * (lateral hand offset = banking).
+ * The user spontaneously begins to levitate after a brief grounding.
+ * A gentle, continuous upward pull lifts the soul. Head direction
+ * steers — look up to ascend faster, look forward to glide, look
+ * down to slow the rise. Hands provide thrust and lateral steering.
  *
- * The result is a dreamy, floating-soul flight experience.
- * There is no ceiling. The user flies freely through space.
+ * Physics: linear drag model. Steady-state speed = thrust / drag.
+ * This guarantees visible movement with predictable, tunable feel.
  */
 export class Levitation {
   /** World offset — applied to the environment root group each frame.
@@ -26,7 +25,7 @@ export class Levitation {
   private groundingTimer = 0;
   private isRising = false;
 
-  // ── Velocity (scene-space, smoothed) ───────────────────────
+  // ── Velocity (scene-space) ─────────────────────────────────
   private velocity = new THREE.Vector3(0, 0, 0);
 
   // ── Temp vectors ───────────────────────────────────────────
@@ -34,23 +33,32 @@ export class Levitation {
   private _handDelta = new THREE.Vector3();
 
   // ── Tuning ─────────────────────────────────────────────────
-  /** Seconds before flight begins */
+  // Grounding
   private readonly GROUNDING_DURATION = 1.5;
-  /** Gentle initial lift speed (m/s) — soft start before head takes over */
-  private readonly INITIAL_LIFT = 0.15;
-  /** Base thrust when hands are at rest (m/s²) — gentle drift in look dir */
-  private readonly BASE_THRUST = 0.08;
-  /** Thrust gain from hand extension (m/s² per unit) */
-  private readonly HAND_THRUST_GAIN = 0.6;
-  /** How much head direction steers (lerp factor per second) */
-  private readonly STEER_RATE = 2.5;
-  /** Maximum speed (m/s) */
-  private readonly MAX_SPEED = 1.2;
-  /** Velocity damping — dreamy deceleration */
-  private readonly DAMPING = 0.92;
-  /** Lateral hand steering gain */
-  private readonly LATERAL_GAIN = 0.4;
-  /** Minimum upward bias so user doesn't crash into ground */
+
+  // Spontaneous lift — always pulls the soul upward
+  // Steady-state rise = AUTO_LIFT / DRAG ≈ 0.5 / 1.2 ≈ 0.42 m/s
+  private readonly AUTO_LIFT = 0.5;
+
+  // Head-directed flight
+  // When looking forward: adds ~0.6/1.2 = 0.5 m/s in gaze direction
+  private readonly HEAD_THRUST = 0.6;
+
+  // Hand boost — extending arms amplifies speed
+  // Max hand contribution ~1.8 → total thrust ~2.9 → speed ~2.4 m/s
+  private readonly HAND_THRUST_GAIN = 1.2;
+
+  // Steering
+  private readonly LATERAL_GAIN = 0.5;
+
+  // Drag — linear drag. Higher = more resistance, lower top speed
+  // All forces reach steady-state at force/drag m/s
+  private readonly DRAG = 1.2;
+
+  // Speed limit
+  private readonly MAX_SPEED = 2.5;
+
+  // Floor
   private readonly MIN_HEIGHT = 0.0;
 
   // ─────────────────────────────────────────────────────────────
@@ -66,7 +74,7 @@ export class Levitation {
     _leftHandSpeed: number,
     _rightHandSpeed: number,
     headForward: THREE.Vector3,
-    headDirection: THREE.Vector3, // full 3D look direction (not flattened)
+    headDirection: THREE.Vector3,
   ): void {
     // ── Grounding pause ────────────────────────────────────────
     if (!this.isRising) {
@@ -77,14 +85,19 @@ export class Levitation {
       return;
     }
 
-    // ── Head look direction = flight direction ─────────────────
-    // Full 3D direction: look up → fly up, look forward → glide
-    const flyDir = headDirection.clone().normalize();
+    // Clamp delta to avoid physics explosion on lag spikes
+    const dt = Math.min(delta, 0.05);
 
-    // ── Hand influence ──────────────────────────────────────────
-    let handThrust = 0;
-    let lateralSteer = 0;
+    // ── 1. Spontaneous upward lift (always active) ─────────────
+    this.velocity.y += this.AUTO_LIFT * dt;
 
+    // ── 2. Head-directed thrust ────────────────────────────────
+    // Full 3D gaze direction — look up = fly up faster, look
+    // forward = glide horizontally, look down = counteract lift
+    const gaze = headDirection.clone().normalize();
+    this.velocity.addScaledVector(gaze, this.HEAD_THRUST * dt);
+
+    // ── 3. Hand thrust + steering ──────────────────────────────
     if (leftActive || rightActive) {
       this._avgHand.set(0, 0, 0);
       let count = 0;
@@ -92,75 +105,56 @@ export class Levitation {
       if (rightActive) { this._avgHand.add(rightHandPos); count++; }
       if (count > 0) this._avgHand.divideScalar(count);
 
-      // Hand position relative to head
+      // Hand offset from head
       this._handDelta.subVectors(this._avgHand, headPos);
 
-      // Hand extension forward = thrust (how far hands are from body)
+      // Forward extension = thrust boost
       const forwardExt = Math.max(0, this._handDelta.dot(headForward));
-      // Hands raised = thrust (arms up or out = go faster)
-      const handSpread = leftActive && rightActive
-        ? leftHandPos.distanceTo(rightHandPos)
+
+      // Arms raised = upward thrust
+      const raiseExt = Math.max(0, this._handDelta.y + 0.15);
+
+      // Arms spread = general thrust
+      const spread = leftActive && rightActive
+        ? Math.max(0, leftHandPos.distanceTo(rightHandPos) - 0.3)
         : 0;
-      const raiseComponent = Math.max(0, this._handDelta.y + 0.1);
 
-      handThrust = (forwardExt * 1.5 + raiseComponent * 0.8 + handSpread * 0.3) * this.HAND_THRUST_GAIN;
+      const handMagnitude =
+        (forwardExt * 2.0 + raiseExt * 1.0 + spread * 0.5)
+        * this.HAND_THRUST_GAIN;
 
-      // Lateral offset → banking/steering
+      // Apply hand thrust in gaze direction
+      this.velocity.addScaledVector(gaze, handMagnitude * dt);
+
+      // Lateral steering — hands offset left/right banks the flight
       const right = new THREE.Vector3()
         .crossVectors(headForward, new THREE.Vector3(0, 1, 0))
         .normalize();
-      lateralSteer = this._handDelta.dot(right) * this.LATERAL_GAIN;
+      const lateral = this._handDelta.dot(right) * this.LATERAL_GAIN;
+      this.velocity.addScaledVector(right, lateral * dt);
     }
 
-    // ── Compute acceleration ─────────────────────────────────
-    const thrust = this.BASE_THRUST + handThrust;
+    // ── 4. Linear drag ─────────────────────────────────────────
+    // v' = v - v * drag * dt  →  steady state: v = thrust / drag
+    const dragFactor = 1.0 - this.DRAG * dt;
+    this.velocity.multiplyScalar(Math.max(dragFactor, 0));
 
-    // Desired velocity direction: mostly head, with lateral hand offset
-    const desiredDir = flyDir.clone();
-
-    // Add lateral steering from hands
-    if (Math.abs(lateralSteer) > 0.001) {
-      const right = new THREE.Vector3()
-        .crossVectors(headForward, new THREE.Vector3(0, 1, 0))
-        .normalize();
-      desiredDir.addScaledVector(right, lateralSteer);
-      desiredDir.normalize();
-    }
-
-    // Always add a gentle upward bias in early flight
-    const heightBias = this.height < 3.0
-      ? this.INITIAL_LIFT * (1.0 - this.height / 3.0)
-      : 0;
-
-    // Accelerate toward desired direction
-    this.velocity.addScaledVector(desiredDir, thrust * delta);
-
-    // Add initial lift bias
-    if (heightBias > 0) {
-      this.velocity.y += heightBias * delta;
-    }
-
-    // Damping for dreamy feel
-    const damping = Math.pow(this.DAMPING, delta * 60);
-    this.velocity.multiplyScalar(damping);
-
-    // Clamp speed
+    // ── 5. Speed cap ───────────────────────────────────────────
     const speed = this.velocity.length();
     if (speed > this.MAX_SPEED) {
       this.velocity.multiplyScalar(this.MAX_SPEED / speed);
     }
 
-    // Prevent going below ground
-    const projectedHeight = this.height + this.velocity.y * delta;
-    if (projectedHeight < this.MIN_HEIGHT && this.velocity.y < 0) {
-      this.velocity.y *= 0.3; // soft ground bounce
+    // ── 6. Floor constraint ────────────────────────────────────
+    const nextHeight = this.height + this.velocity.y * dt;
+    if (nextHeight < this.MIN_HEIGHT && this.velocity.y < 0) {
+      this.velocity.y *= 0.1;
     }
 
-    // ── Apply to world offset ────────────────────────────────
-    // Negative because world moves opposite to user
-    this.offset.x -= this.velocity.x * delta;
-    this.offset.y -= this.velocity.y * delta;
-    this.offset.z -= this.velocity.z * delta;
+    // ── 7. Apply to world offset ───────────────────────────────
+    this.offset.x -= this.velocity.x * dt;
+    this.offset.y -= this.velocity.y * dt;
+    this.offset.z -= this.velocity.z * dt;
   }
 
   /** Reset to grounding (e.g. when re-entering VR). */
