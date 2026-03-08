@@ -14,10 +14,18 @@ export class AudioEngine {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
+    // Create AudioContext synchronously inside the user gesture —
+    // browsers gate .resume() on gesture proximity, so we must not
+    // delay context creation behind an await.
     this.ctx = new AudioContext();
     this.gainNode = this.ctx.createGain();
     this.gainNode.gain.value = 0;
     this.gainNode.connect(this.ctx.destination);
+
+    // Resume immediately while still in the gesture handler
+    if (this.ctx.state === "suspended") {
+      await this.ctx.resume();
+    }
 
     // Pre-load the soundtrack
     try {
@@ -36,12 +44,12 @@ export class AudioEngine {
   }
 
   /** Start the looping soundtrack with a gentle fade-in */
-  playSoundtrack(): void {
+  async playSoundtrack(): Promise<void> {
     if (!this.ctx || !this.gainNode || !this.audioBuffer || this.playing) return;
 
     // Resume context if suspended (autoplay policy)
     if (this.ctx.state === "suspended") {
-      this.ctx.resume();
+      await this.ctx.resume();
     }
 
     this.sourceNode = this.ctx.createBufferSource();
