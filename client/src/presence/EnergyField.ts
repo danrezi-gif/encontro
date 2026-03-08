@@ -57,12 +57,10 @@ const FRAGMENT = /* glsl */ `
   }
 
   float fbm(vec3 p) {
-    float v = 0.0, a = 0.5;
-    for (int i = 0; i < 3; i++) {
-      v += a * noise(p);
-      p = p * 2.0 + vec3(100.0);
-      a *= 0.5;
-    }
+    float v = 0.0;
+    v += 0.5 * noise(p);
+    p = p * 2.0 + vec3(100.0);
+    v += 0.25 * noise(p);
     return v;
   }
 
@@ -117,10 +115,17 @@ const FRAGMENT = /* glsl */ `
     float prayer = uHandProximity;
     float prayerGlow = prayer * prayer; // quadratic ramp for dramatic effect
 
-    for (float i = 0.0; i < 50.0; i++) {
+    for (float i = 0.0; i < 32.0; i++) {
       vec3 p = cameraPosition + rd * z;
 
       float bd = bodyField(p);
+
+      // Skip noise entirely when far from body — just advance
+      if (bd > 0.5) {
+        z += bd * 0.5;
+        if (z > marchLen) break;
+        continue;
+      }
 
       float relY = p.y - uHeadPos.y;
 
@@ -129,15 +134,10 @@ const FRAGMENT = /* glsl */ `
       cp.y -= T * cascadeSpeed;
       float cascade = fbm(cp);
 
-      float fine = noise(p * 8.0 + vec3(0.0, -T * cascadeSpeed * 1.4, 0.0));
-
       float veins = 1.0 - abs(cascade - 0.5) * 2.0;
       veins = pow(max(veins, 0.0), 2.5);
 
-      float fineVeins = 1.0 - abs(fine - 0.5) * 2.0;
-      fineVeins = pow(max(fineVeins, 0.0), 3.0);
-
-      float stream = veins * 0.7 + fineVeins * 0.3;
+      float stream = veins;
 
       // ── Density ──────────────────────────────────────────────
       float density = 0.0;
@@ -183,9 +183,7 @@ const FRAGMENT = /* glsl */ `
 
       // Prayer: shift to warm multicolored (subtle iridescence)
       if (prayerGlow > 0.01) {
-        // Iridescent color shift based on position + time
         vec3 prayerColor = 0.5 + 0.5 * cos(T * 0.5 + relY * 4.0 + vec3(0.0, 2.1, 4.2));
-        // Blend from warm white toward prismatic
         vec3 warmPrayer = mix(vec3(1.0, 0.9, 0.7), prayerColor, 0.4);
         lightCol = mix(lightCol, warmPrayer, prayerGlow);
       }
@@ -194,7 +192,7 @@ const FRAGMENT = /* glsl */ `
       totalAlpha += density * 0.05;
 
       // Adaptive step — finer near the body surface
-      float step = bd < 0.25 ? 0.025 : max(bd * 0.4, 0.03);
+      float step = bd < 0.25 ? 0.035 : max(bd * 0.45, 0.04);
       z += step;
       if (z > marchLen) break;
     }
@@ -228,7 +226,7 @@ export class EnergyField {
   constructor() {
     this.group = new THREE.Group();
 
-    this.geometry = new THREE.IcosahedronGeometry(2.5, 4);
+    this.geometry = new THREE.IcosahedronGeometry(2.5, 3);
 
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERTEX,

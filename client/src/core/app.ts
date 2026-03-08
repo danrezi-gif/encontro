@@ -114,7 +114,7 @@ export class App {
 
     // Initialize audio from user gesture context, then start soundtrack
     await this.audio.initialize();
-    this.audio.playSoundtrack();
+    await this.audio.playSoundtrack();
 
     this.renderer.setAnimationLoop((time, frame) => {
       this.update(time, frame);
