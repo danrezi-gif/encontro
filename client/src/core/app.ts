@@ -11,6 +11,7 @@ import { DarkMeadow } from "../environment/DarkMeadow";
 import { EtherealMist } from "../environment/EtherealMist";
 import { DustStreams } from "../environment/DustStreams";
 import { Levitation } from "../presence/Levitation";
+import { AudioEngine } from "../audio/AudioEngine";
 
 /**
  * Main application — bootstraps the Three.js scene, WebXR session,
@@ -38,6 +39,7 @@ export class App {
   private dustStreams: DustStreams;
   private breathStream: BreathStream;
   private levitation: Levitation;
+  private audio: AudioEngine;
   private worldRoot: THREE.Group;
   private isRunning = false;
   private vrButton: HTMLElement | null = null;
@@ -97,6 +99,9 @@ export class App {
     this.xr.onSessionStart(() => this.levitation.reset());
     this.xr.onSessionEnd(() => this.levitation.reset());
 
+    // Audio
+    this.audio = new AudioEngine();
+
     this.handleResize = this.handleResize.bind(this);
     window.addEventListener("resize", this.handleResize);
     this.handleResize();
@@ -106,6 +111,10 @@ export class App {
 
   async start(): Promise<void> {
     this.isRunning = true;
+
+    // Initialize audio from user gesture context, then start soundtrack
+    await this.audio.initialize();
+    this.audio.playSoundtrack();
 
     this.renderer.setAnimationLoop((time, frame) => {
       this.update(time, frame);
@@ -369,6 +378,7 @@ export class App {
     this.isRunning = false;
     this.renderer.setAnimationLoop(null);
     window.removeEventListener("resize", this.handleResize);
+    this.audio.dispose();
     this.xr.dispose();
     this.energyField.dispose();
     this.energyFieldBokeh.dispose();
